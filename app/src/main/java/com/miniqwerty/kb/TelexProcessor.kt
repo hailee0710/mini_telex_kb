@@ -9,7 +9,7 @@ package com.miniqwerty.kb
  * ## Vowel Transformations
  * - aw → ă    aa → â    ee → ê
  * - oo → ô    ow → ơ    uw → ư
- * - uow → ươ
+ * - uow → ươ   uiw → ưi
  * - dd → đ
  * - Trailing w: a w typed late (after the closing consonant) still converts
  *   the word's uo into ươ ("truotw" → trươt, "truotwj" → trượt); with no uo
@@ -27,6 +27,10 @@ package com.miniqwerty.kb
  *    vowel is an onset consonant (sad, run) and a doubled tone-key letter is
  *    a consonant, not a tone (office, message, carry) — both stay literal.
  * 2. Pressing the same tone key twice toggles the tone off (literal char).
+ *    The IME commits the word immediately — the toggle is a deliberate "this
+ *    word is English" gesture, so a following letter starts a fresh word
+ *    ("charr" commits "char", then "z" spells "charz"). A doubled tone-key
+ *    followed by a vowel is a real English consonant and stays (carry).
  * 3. Pressing a different tone key replaces the current tone.
  * 4. The key 'z' resets the tone state (literalizes any pending tone).
  *
@@ -69,6 +73,8 @@ object TelexProcessor {
     // "uow" would greedily resolve "ow" → ơ and leave "uơ" instead of "ươ".
     private val TRIPLE_TRANSFORMS: Map<String, String> = mapOf(
         "uow" to "ươ",  // ươ
+        "uiw" to "ưi",  // ưi — a w typed after the i still spells ư:
+        // "guiwr" → gửi, parallel to canonical "guwir" (u-w-i).
     )
 
     private val TONE_KEYS: Set<Char> = setOf('s', 'f', 'r', 'x', 'j')
@@ -173,7 +179,14 @@ object TelexProcessor {
      * set when the user's own keystrokes forced a literal form (an undo, or
      * a tone key spilled by toggling the tone off).
      */
-    private data class CoreResult(val text: String, val literalRequested: Boolean)
+    private data class CoreResult(
+        val text: String,
+        val literalRequested: Boolean,
+        /** True when the same tone key was pressed twice, toggling the tone off
+         *  and spilling the key literally ("charr" → "char"). The IME commits
+         *  such words immediately. */
+        val toneToggle: Boolean = false,
+    )
 
     private fun resolveCore(raw: String): CoreResult {
         if (raw.isEmpty()) return CoreResult("", false)
@@ -212,9 +225,9 @@ object TelexProcessor {
         val spilled = literals.isNotEmpty()
 
         return if (finalTone != null) {
-            CoreResult(applyTone(base + literals, finalTone), spilled)
+            CoreResult(applyTone(base + literals, finalTone), spilled, toneToggle = spilled)
         } else {
-            CoreResult(base + literals, spilled)
+            CoreResult(base + literals, spilled, toneToggle = spilled)
         }
     }
 
@@ -271,6 +284,17 @@ object TelexProcessor {
         if (baseLen <= 0) return false
         return extractEmbeddedTones(raw.substring(0, baseLen)).second.isNotEmpty()
     }
+
+    /**
+     * True when [raw] resolves through a same-tone-twice toggle — the tone key
+     * was pressed a second time, toggling the tone off and spilling the key
+     * literally ("charr" → "char", "forr" → "for"). The IME commits such words
+     * immediately: the toggle is a deliberate "this word is English, done"
+     * gesture, and committing means a following letter starts a fresh word
+     * instead of re-interpreting the doubled tone key as a doubled consonant
+     * ("charr" then "z" would otherwise resurrect the r as "charrz").
+     */
+    fun hasToneToggle(raw: String): Boolean = resolveCore(raw).toneToggle
 
     /**
      * Left-to-right greedy vowel-transformation pass.

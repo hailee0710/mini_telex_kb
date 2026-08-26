@@ -206,7 +206,15 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
 
         // Append to raw buffer and resolve
         rawBuffer.append(char)
-        updateComposingText()
+        // Same-tone-twice toggle ("charr" → "char") is a deliberate "this word
+        // is English, done" gesture: commit it immediately so a following
+        // letter starts a fresh word instead of re-interpreting the doubled
+        // tone key as a doubled consonant ("charr" then "z" → "charrz").
+        if (smartTelexEnabled && TelexProcessor.hasToneToggle(rawBuffer.toString())) {
+            commitBuffer(ic)
+        } else {
+            updateComposingText()
+        }
     }
 
     override fun onReplaceCharacter(char: Char) {

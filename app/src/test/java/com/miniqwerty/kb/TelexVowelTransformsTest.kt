@@ -70,6 +70,18 @@ class TelexVowelTransformsTest {
         assertEquals("view", TelexProcessor.resolve("view"))
     }
 
+    @Test fun `late w after ui spells uiw`() {
+        // "uiw" triple: a w typed after the i still makes ưi ("guiwr" → gửi),
+        // parallel to canonical "guwir" (u-w-i).
+        assertEquals("gưi", TelexProcessor.resolve("guiw"))
+        assertEquals("gửi", TelexProcessor.resolve("guiwr"))
+        assertEquals("gửi", TelexProcessor.resolve("guwir"))
+        // Tone key before the late w also works: "guirw" → gửi.
+        assertEquals("gửi", TelexProcessor.resolve("guirw"))
+        // Undo: a third w restores the literal triple.
+        assertEquals("uiw", TelexProcessor.resolve("uiww"))
+    }
+
     @Test fun `contiguous transforms still win over the late w`() {
         assertEquals("mơ", TelexProcessor.resolve("mow"))
         assertEquals("mă", TelexProcessor.resolve("maw"))
