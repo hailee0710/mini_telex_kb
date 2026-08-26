@@ -162,6 +162,39 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     }
 
     /**
+     * Fires when the target editor's selection or composing region changes.
+     * A user tap that moves the caret elsewhere while a word is pending must
+     * not leave the composing text detached from the caret — finalize the word
+     * where it stands. Our own composing updates always leave the caret at the
+     * composing end, so they never take this branch.
+     */
+    override fun onUpdateSelection(
+        oldSelStart: Int, oldSelEnd: Int,
+        newSelStart: Int, newSelEnd: Int,
+        newComposingStart: Int, newComposingEnd: Int,
+    ) {
+        super.onUpdateSelection(
+            oldSelStart, oldSelEnd, newSelStart, newSelEnd, newComposingStart, newComposingEnd)
+        val ic = currentInputConnection ?: return
+        if (rawBuffer.isEmpty()) return
+
+        val caretAtComposingEnd = newComposingStart >= 0 &&
+            newSelStart == newComposingEnd && newSelEnd == newComposingEnd
+        if (!caretAtComposingEnd) {
+            // The caret moved away from the composing word (user tapped). The
+            // word must stay where it is, so finalize it in place instead of
+            // commitText at the caret, which would duplicate it elsewhere.
+            // finishComposingText (unlike commitComposingText, which moves the
+            // caret to the composing start) keeps the tapped caret untouched.
+            if (newComposingStart >= 0) {
+                @Suppress("DEPRECATION")
+                ic.finishComposingText()
+            }
+            rawBuffer.clear()
+        }
+    }
+
+    /**
      * Paint the system navigation bar (the strip below the keyboard holding the
      * gesture pill) with the keyboard's own background color. `getWindow()`
      * returns the SoftInputWindow (a Dialog); the second call reaches the
@@ -525,11 +558,13 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     private fun commitBuffer(ic: InputConnection) {
         val resolved = TelexProcessor.resolve(
             rawBuffer.toString(), smart = smartTelexEnabled, dict = wordDict)
+        // Clear before touching the editor so an onUpdateSelection delivered
+        // synchronously by commitText cannot re-enter this buffer.
+        rawBuffer.clear()
         if (resolved.isNotEmpty()) {
             ic.commitText(resolved, 1)
         }
         ic.setComposingText("", 0)
-        rawBuffer.clear()
     }
 
     /**
