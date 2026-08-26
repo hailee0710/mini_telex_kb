@@ -150,7 +150,14 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
-        commitPending()
+        // The user has left the text field — commit the pending word so typed
+        // text is never lost. Explicit lifecycle end, so commit unconditionally
+        // (see commitBuffer()); do not gate on the composing-region probe,
+        // which some editors report as cleared once focus moves.
+        val ic = currentInputConnection
+        if (ic != null) {
+            commitBuffer(ic)
+        }
         rawBuffer.clear()
     }
 
