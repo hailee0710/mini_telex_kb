@@ -42,6 +42,14 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
      *  jumping to "lảnte". */
     private var composingShowsRaw = false
 
+    /** The most recent character committed directly to the editor — a
+     *  punctuation/whitespace char (commits immediately via [onCharacter]),
+     *  or a numeric-layer char. Double-tap replace targets this when the raw
+     *  buffer is empty: the secondary replaces it in the editor, the same way
+     *  the numeric layer replaces a directly-committed digit. Null while a
+     *  Telex word owns the tail of the text. */
+    private var lastDirectChar: Char? = null
+
     /** Editor capabilities from the last [onStartInput]. */
     private var editorInfo: EditorInfo? = null
 
@@ -159,6 +167,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             commitBuffer(ic)
         }
         rawBuffer.clear()
+        lastDirectChar = null
     }
 
     /**
@@ -191,6 +200,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
                 ic.finishComposingText()
             }
             rawBuffer.clear()
+            lastDirectChar = null
         }
     }
 
@@ -240,11 +250,14 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             // unconditionally (see commitBuffer()).
             commitBuffer(ic)
             ic.commitText(char.toString(), 1)
+            lastDirectChar = char
             updateComposingText()
             return
         }
 
-        // Append to raw buffer and resolve
+        // Append to raw buffer and resolve — the word now owns the tail of
+        // the text, so no directly-committed char is replaceable.
+        lastDirectChar = null
         rawBuffer.append(char)
         // Same-tone-twice toggle ("charr" → "char") is a deliberate "this word
         // is English, done" gesture: commit it immediately so a following
@@ -262,8 +275,21 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         // before re-resolving the buffer.
         if (rawBuffer.isNotEmpty()) {
             rawBuffer.deleteCharAt(rawBuffer.lastIndex)
+            onCharacter(char)
+            return
         }
-        onCharacter(char)
+        // No pending word: the first tap's primary was a punctuation char
+        // that committed directly ("x," — comma is in the shouldCommit set),
+        // so it lives in the editor, not the buffer. Delete it there and
+        // insert the secondary ("x."), mirroring the numeric layer.
+        val ic = currentInputConnection ?: return
+        if (lastDirectChar != null) {
+            lastDirectChar = null
+            ic.deleteSurroundingText(1, 0)
+            ic.commitText(char.toString(), 1)
+        } else {
+            onCharacter(char)
+        }
     }
 
     override fun onDirectCharacter(char: Char) {
@@ -273,6 +299,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         val ic = currentInputConnection ?: return
         commitBuffer(ic)
         ic.commitText(char.toString(), 1)
+        lastDirectChar = char
     }
 
     override fun onReplaceDirectCharacter(char: Char) {
@@ -280,8 +307,10 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         // directly, so delete it in the editor and insert the symbol.
         val ic = currentInputConnection ?: return
         commitBuffer(ic)
+        lastDirectChar = null
         ic.deleteSurroundingText(1, 0)
         ic.commitText(char.toString(), 1)
+        lastDirectChar = char
     }
 
     override fun onBackspace() {
@@ -339,6 +368,9 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         } else {
             ic.commitText(" ", 1)
         }
+        // The space is a direct commit, but it has no secondary key — a
+        // later double-tap must never delete it. Drop the replace target.
+        lastDirectChar = null
         updateComposingText()
     }
 
@@ -561,6 +593,9 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         // Clear before touching the editor so an onUpdateSelection delivered
         // synchronously by commitText cannot re-enter this buffer.
         rawBuffer.clear()
+        // The committed word now owns the tail of the text — no direct char
+        // from before it is replaceable by a double-tap.
+        lastDirectChar = null
         if (resolved.isNotEmpty()) {
             ic.commitText(resolved, 1)
         }
@@ -581,6 +616,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         if (resolved.isNotEmpty() && editorHasComposingRegion()) {
             ic.commitText(resolved, 1)
         }
+        lastDirectChar = null
         ic.setComposingText("", 0)
     }
 
