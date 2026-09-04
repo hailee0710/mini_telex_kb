@@ -20,6 +20,8 @@
     <string name="double_tap_label">Double-tap window: %1$d ms</string>
     <string name="auto_cap_title">Auto-capitalize</string>
     <string name="auto_cap_label">Capitalize first letter of a sentence</string>
+    <string name="suggestion_title">Clipboard suggestions</string>
+    <string name="suggestion_label">Show paste suggestion strip</string>
     <string name="test_title">Try it out</string>
     <string name="test_hint">Type here to test the keyboard</string>
 </resources>

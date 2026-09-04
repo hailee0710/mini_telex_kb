@@ -73,6 +73,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         addToHistory(readClipboardText(), freshCopy = true)
         if (::keyboardView.isInitialized) {
             keyboardView.updateClipboardItems(clipboardHistory)
+            updateSuggestionStrip()
         }
     }
 
@@ -88,6 +89,10 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
      *  be uppercased: set after a terminator (. ! ? newline), on a fresh
      *  field, and consumed by the first letter typed. */
     private var capitalizeNext = false
+
+    /** User toggle — show the clipboard paste suggestion strip above row 1
+     *  (Gboard-style) when the field is empty. */
+    private var suggestionStripEnabled = true
 
     /** Known Vietnamese words, loaded once from assets; null while loading
      *  or on load failure (commit-time dictionary check is then skipped). */
@@ -118,6 +123,12 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
                     keyboardView.refreshTheme()
                 }
             }
+            Prefs.KEY_SUGGESTION_STRIP -> {
+                suggestionStripEnabled = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+                    .getBoolean(Prefs.KEY_SUGGESTION_STRIP, true)
+                // Apply live — a running keyboard hides/shows the strip now.
+                updateSuggestionStrip()
+            }
         }
     }
 
@@ -135,6 +146,8 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             .getBoolean(Prefs.KEY_SMART_TELEX_ENABLED, true)
         autoCapitalize = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
             .getBoolean(Prefs.KEY_AUTO_CAPITALIZE, true)
+        suggestionStripEnabled = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            .getBoolean(Prefs.KEY_SUGGESTION_STRIP, true)
         loadWordDict()
     }
 
@@ -164,10 +177,17 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         commitPending()
         rawBuffer.clear()
         keyboardView.shiftActive = false
+        // Re-read the current clip: while the keyboard was hidden the change
+        // listener does not fire, so the suggestion strip catches up here.
+        val current = readClipboardText()
+        if (current != null && current !in dismissedClips) {
+            addToHistory(current, freshCopy = false)
+        }
         // A fresh field (or one whose text before the caret is only whitespace)
         // starts a sentence — capitalize its first letter.
         capitalizeNext = shouldCapitalizeOnStart()
         updateComposingText()
+        updateSuggestionStrip()
     }
 
     // Never enter fullscreen IME mode in landscape — keep the compact
@@ -203,6 +223,9 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     ) {
         super.onUpdateSelection(
             oldSelStart, oldSelEnd, newSelStart, newSelEnd, newComposingStart, newComposingEnd)
+        // The caret moved — the field may have become empty (or been emptied
+        // elsewhere), so re-evaluate the suggestion strip.
+        updateSuggestionStrip()
         val ic = currentInputConnection ?: return
         if (rawBuffer.isEmpty()) return
 
@@ -275,6 +298,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             lastDirectChar = char
             markSentenceStart(char)
             updateComposingText()
+            updateSuggestionStrip()
             return
         }
 
@@ -300,6 +324,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         } else {
             updateComposingText()
         }
+        updateSuggestionStrip()
     }
 
     override fun onReplaceCharacter(char: Char) {
@@ -334,6 +359,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         ic.commitText(char.toString(), 1)
         lastDirectChar = char
         markSentenceStart(char)
+        updateSuggestionStrip()
     }
 
     override fun onReplaceDirectCharacter(char: Char) {
@@ -382,6 +408,8 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             // context — don't force the next letter into a capital.
             capitalizeNext = false
         }
+        // Deleting may have emptied the field — re-evaluate the strip.
+        updateSuggestionStrip()
     }
 
     override fun onShift() {
@@ -409,6 +437,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         // later double-tap must never delete it. Drop the replace target.
         lastDirectChar = null
         updateComposingText()
+        updateSuggestionStrip()
     }
 
     override fun onReturn() {
@@ -428,6 +457,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             ic.commitText("\n", 1)
         }
         updateComposingText()
+        updateSuggestionStrip()
     }
 
     override fun onCursorMove(delta: Int) {
@@ -482,6 +512,8 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         }
         // Stay on the clipboard layer; the pasted item moved to the top.
         keyboardView.updateClipboardItems(clipboardHistory)
+        // The pasted text precedes the caret — field no longer empty.
+        updateSuggestionStrip()
     }
 
     override fun onClipboardDismiss(index: Int) {
@@ -494,6 +526,17 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             dismissedClips.remove(dismissedClips.first())
         }
         keyboardView.updateClipboardItems(clipboardHistory)
+        updateSuggestionStrip()
+    }
+
+    override fun onSuggestionItem(index: Int) {
+        val text = clipboardHistory.getOrNull(index) ?: return
+        val ic = currentInputConnection ?: return
+        // The strip shows only over an empty field — insert directly, no Telex
+        // buffer involved (the paste is committed text).
+        ic.commitText(text, 1)
+        // The pasted text now precedes the caret, so the strip hides itself.
+        updateSuggestionStrip()
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -617,6 +660,23 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         val resolved = TelexProcessor.resolve(buffer, smart = smartTelexEnabled, dict = dict)
         composingShowsRaw = resolved == buffer
         ic.setComposingText(resolved, 1)
+    }
+
+    /**
+     * Show/hide the clipboard suggestion strip: visible only when the toggle
+     * is on, the clipboard holds text, and nothing precedes the caret (an
+     * empty field — the user is about to paste, Gboard-style). Unreachable
+     * input at start usually means an empty field — show, like the cap rule.
+     */
+    private fun updateSuggestionStrip() {
+        if (!::keyboardView.isInitialized) return
+        // A live Telex word (composing) counts as typed content even where the
+        // editor does not include the composing span in text-before-cursor.
+        val ic = currentInputConnection
+        val empty = rawBuffer.isEmpty() &&
+            (ic == null || ic.getTextBeforeCursor(1, 0).isNullOrEmpty())
+        val show = suggestionStripEnabled && empty && clipboardHistory.isNotEmpty()
+        keyboardView.updateSuggestions(clipboardHistory, show)
     }
 
     /**

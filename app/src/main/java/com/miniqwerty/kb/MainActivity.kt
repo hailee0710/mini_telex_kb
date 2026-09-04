@@ -88,6 +88,13 @@ class MainActivity : Activity() {
             prefs.edit().putBoolean(Prefs.KEY_AUTO_CAPITALIZE, checked).apply()
         }
 
+        // ── Clipboard suggestions ─────────────────────────────────────────
+        val suggestionSwitch = findViewById<Switch>(R.id.suggestion_switch)
+        suggestionSwitch.isChecked = prefs.getBoolean(Prefs.KEY_SUGGESTION_STRIP, true)
+        suggestionSwitch.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean(Prefs.KEY_SUGGESTION_STRIP, checked).apply()
+        }
+
         // ── Enable keyboard shortcut ──────────────────────────────────────
         findViewById<Button>(R.id.enable_button).setOnClickListener {
             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
