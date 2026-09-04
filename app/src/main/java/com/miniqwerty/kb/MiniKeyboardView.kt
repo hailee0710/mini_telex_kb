@@ -727,7 +727,8 @@ class MiniKeyboardView(context: Context) : View(context) {
         val top = handleHeightPx + padY
         val bottom = handleHeightPx + stripH - padY
 
-        suggestionTextPaint.textSize = stripH * 0.5f
+        suggestionTextPaint.textSize = stripH * SUGGESTION_TEXT_SCALE
+        val xzone = SUGGESTION_DISMISS_DP * density
 
         var x = marginX - suggestionScrollPx
         for (item in suggestionItems) {
@@ -735,7 +736,8 @@ class MiniKeyboardView(context: Context) : View(context) {
                 if (it.length > SUGGESTION_CHIP_MAX_CHARS)
                     it.take(SUGGESTION_CHIP_MAX_CHARS) + "…" else it
             }
-            val w = suggestionTextPaint.measureText(label) + padX * 2f
+            // Text region plus the ✕ dismiss zone at the right edge.
+            val w = suggestionTextPaint.measureText(label) + padX * 2f + xzone
             chipRects.add(RectF(x, top, x + w, bottom))
             chipLabels.add(label)
             x += w + gap
@@ -917,25 +919,36 @@ class MiniKeyboardView(context: Context) : View(context) {
     }
 
     /** Suggestion strip: one rounded chip per clipboard item, scrollable
-     *  horizontally. The pressed chip fills with the pressed key color. */
+     *  horizontally. Each chip carries its label and a ✕ dismiss zone at its
+     *  right edge (mirrors the clipboard layer's per-item ✕). */
     private fun drawSuggestionStrip(canvas: Canvas) {
         suggestionTextPaint.textAlign = Paint.Align.CENTER
         val fm = suggestionTextPaint.fontMetrics
+        val xzone = SUGGESTION_DISMISS_DP * resources.displayMetrics.density
         for (i in chipRects.indices) {
             val rect = chipRects[i]
             // Skip chips scrolled out of the viewport.
             if (rect.right < 0f || rect.left > viewWidth) continue
             val pressed = i == suggestionDownIndex && !suggestionScrollActive
-            val bg = if (pressed) keyBgPressedPaint else keyBgModifierPaint
-            canvas.drawRoundRect(rect, cornerRadius, cornerRadius, bg)
+            canvas.drawRoundRect(
+                rect, cornerRadius, cornerRadius,
+                if (pressed) keyBgPressedPaint else keyBgModifierPaint
+            )
             // Vertically center the label inside the chip.
             val baseline = rect.top + (rect.height() - (fm.descent - fm.ascent)) / 2f - fm.ascent
+            // Label centered over the text region (left of the ✕ zone).
+            val labelRight = rect.right - xzone
             canvas.drawText(
                 chipLabels[i],
-                (rect.left + rect.right) / 2f,
+                (rect.left + labelRight) / 2f,
                 baseline,
                 suggestionTextPaint
             )
+            // Dismiss ✕ pinned to the right edge, smaller than the label.
+            val baseSize = suggestionTextPaint.textSize
+            suggestionTextPaint.textSize = stripHeightPx * SUGGESTION_DISMISS_TEXT_SCALE
+            canvas.drawText("✕", rect.right - xzone / 2f, baseline, suggestionTextPaint)
+            suggestionTextPaint.textSize = baseSize
         }
     }
 
@@ -1057,7 +1070,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                 if (dragActive) return true
                 val idx = event.findPointerIndex(activePointerId)
                 if (suggestionDownIndex >= 0) {
-                    commitSuggestionGesture()
+                    commitSuggestionGesture(if (idx >= 0) event.getX(idx) else event.x)
                 } else {
                     commitGesture(if (idx >= 0) event.getX(idx) else event.x)
                 }
@@ -1198,7 +1211,7 @@ class MiniKeyboardView(context: Context) : View(context) {
 
                 val idx = event.findPointerIndex(activePointerId)
                 if (suggestionDownIndex >= 0) {
-                    commitSuggestionGesture()
+                    commitSuggestionGesture(if (idx >= 0) event.getX(idx) else event.x)
                 } else {
                     commitGesture(if (idx >= 0) event.getX(idx) else event.x)
                 }
@@ -1212,7 +1225,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                 if (event.getPointerId(event.actionIndex) == activePointerId) {
                     val idx = event.findPointerIndex(activePointerId)
                     if (suggestionDownIndex >= 0) {
-                        commitSuggestionGesture()
+                        commitSuggestionGesture(if (idx >= 0) event.getX(idx) else event.x)
                     } else {
                         commitGesture(if (idx >= 0) event.getX(idx) else event.x)
                     }
@@ -1369,14 +1382,22 @@ class MiniKeyboardView(context: Context) : View(context) {
     }
 
     /** Finalize a suggestion-strip gesture. A clean tap (no drag beyond the
-     *  slop, which would have turned into a scroll) pastes the pressed chip. */
-    private fun commitSuggestionGesture() {
+     *  slop, which would have turned into a scroll) pastes the pressed chip —
+     *  unless the release lands on its ✕ zone, which dismisses the entry
+     *  (mirrors the clipboard layer, and the index matches its history order). */
+    private fun commitSuggestionGesture(releaseX: Float) {
         val index = suggestionDownIndex
         val scrolled = suggestionScrollActive
         suggestionDownIndex = -1
         suggestionScrollActive = false
-        if (!scrolled && index >= 0 && index < chipRects.size) {
-            onKeyActionListener?.onSuggestionItem(index)
+        if (scrolled || index < 0 || index >= chipRects.size) return
+        val listener = onKeyActionListener ?: return
+        val xzone = SUGGESTION_DISMISS_DP * resources.displayMetrics.density
+        val inDismiss = releaseX >= chipRects[index].right - xzone
+        if (inDismiss) {
+            listener.onClipboardDismiss(index)
+        } else {
+            listener.onSuggestionItem(index)
         }
     }
 
@@ -1686,5 +1707,13 @@ class MiniKeyboardView(context: Context) : View(context) {
         private const val SUGGESTION_CHIP_GAP_DP = 6f
         /** Max chars of a clip shown on a chip label (display only). */
         private const val SUGGESTION_CHIP_MAX_CHARS = 20
+        /** Chip label font scale relative to the strip height — kept small,
+         *  Gboard-like. */
+        private const val SUGGESTION_TEXT_SCALE = 0.38f
+        /** Per-chip dismiss (✕) zone width at the chip's right edge (dp). */
+        private const val SUGGESTION_DISMISS_DP = 32f
+        /** ✕ glyph font scale relative to the strip height (smaller than the
+         *  label). */
+        private const val SUGGESTION_DISMISS_TEXT_SCALE = 0.28f
     }
 }
