@@ -79,6 +79,13 @@ class MainActivity : Activity() {
             }
         })
 
+        // ── Auto-capitalize ───────────────────────────────────────────────
+        val autoCapSwitch = findViewById<Switch>(R.id.auto_cap_switch)
+        autoCapSwitch.isChecked = prefs.getBoolean(Prefs.KEY_AUTO_CAPITALIZE, true)
+        autoCapSwitch.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean(Prefs.KEY_AUTO_CAPITALIZE, checked).apply()
+        }
+
         // ── Enable keyboard shortcut ──────────────────────────────────────
         findViewById<Button>(R.id.enable_button).setOnClickListener {
             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))

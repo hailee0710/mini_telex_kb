@@ -101,6 +101,21 @@
         android:layout_height="wrap_content"
         android:max="40" />
 
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="@string/auto_cap_title"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <Switch
+        android:id="@+id/auto_cap_switch"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/auto_cap_label" />
+
     <Button
         android:id="@+id/enable_button"
         android:layout_width="wrap_content"

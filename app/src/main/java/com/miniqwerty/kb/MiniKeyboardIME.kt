@@ -80,6 +80,15 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     /** User toggle for English-aware validation. */
     private var smartTelexEnabled = true
 
+    // ── Auto-capitalize ─────────────────────────────────────────────────
+    /** User toggle — capitalize the first letter of a new sentence. */
+    private var autoCapitalize = true
+
+    /** True when the next alphabetic character starts a sentence and should
+     *  be uppercased: set after a terminator (. ! ? newline), on a fresh
+     *  field, and consumed by the first letter typed. */
+    private var capitalizeNext = false
+
     /** Known Vietnamese words, loaded once from assets; null while loading
      *  or on load failure (commit-time dictionary check is then skipped). */
     private var wordDict: Set<String>? = null
@@ -93,6 +102,10 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             Prefs.KEY_SMART_TELEX_ENABLED -> {
                 smartTelexEnabled = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
                     .getBoolean(Prefs.KEY_SMART_TELEX_ENABLED, true)
+            }
+            Prefs.KEY_AUTO_CAPITALIZE -> {
+                autoCapitalize = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+                    .getBoolean(Prefs.KEY_AUTO_CAPITALIZE, true)
             }
             Prefs.KEY_THEME_MODE -> {
                 if (::keyboardView.isInitialized) {
@@ -120,6 +133,8 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             .registerOnSharedPreferenceChangeListener(onPrefsChanged)
         smartTelexEnabled = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
             .getBoolean(Prefs.KEY_SMART_TELEX_ENABLED, true)
+        autoCapitalize = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            .getBoolean(Prefs.KEY_AUTO_CAPITALIZE, true)
         loadWordDict()
     }
 
@@ -149,6 +164,9 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         commitPending()
         rawBuffer.clear()
         keyboardView.shiftActive = false
+        // A fresh field (or one whose text before the caret is only whitespace)
+        // starts a sentence — capitalize its first letter.
+        capitalizeNext = shouldCapitalizeOnStart()
         updateComposingText()
     }
 
@@ -168,6 +186,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         }
         rawBuffer.clear()
         lastDirectChar = null
+        capitalizeNext = false
     }
 
     /**
@@ -201,6 +220,9 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             }
             rawBuffer.clear()
             lastDirectChar = null
+            // The caret left the composing word — the user repositioned it, so
+            // the sentence-start assumption no longer holds. Don't force a cap.
+            capitalizeNext = false
         }
     }
 
@@ -251,6 +273,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             commitBuffer(ic)
             ic.commitText(char.toString(), 1)
             lastDirectChar = char
+            markSentenceStart(char)
             updateComposingText()
             return
         }
@@ -258,7 +281,16 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         // Append to raw buffer and resolve — the word now owns the tail of
         // the text, so no directly-committed char is replaceable.
         lastDirectChar = null
-        rawBuffer.append(char)
+        if (autoCapitalize && capitalizeNext && rawBuffer.isEmpty() && char.isLetter()) {
+            // First letter of a new sentence. Uppercasing is idempotent, so a
+            // char already uppercased by the shift latch or caps lock passes
+            // through unchanged; Telex propagates the case into its transforms
+            // ("Aa" resolves to "Â"), so Vietnamese works too.
+            capitalizeNext = false
+            rawBuffer.append(char.uppercaseChar())
+        } else {
+            rawBuffer.append(char)
+        }
         // Same-tone-twice toggle ("charr" → "char") is a deliberate "this word
         // is English, done" gesture: commit it immediately so a following
         // letter starts a fresh word instead of re-interpreting the doubled
@@ -287,6 +319,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             lastDirectChar = null
             ic.deleteSurroundingText(1, 0)
             ic.commitText(char.toString(), 1)
+            markSentenceStart(char)
         } else {
             onCharacter(char)
         }
@@ -300,6 +333,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         commitBuffer(ic)
         ic.commitText(char.toString(), 1)
         lastDirectChar = char
+        markSentenceStart(char)
     }
 
     override fun onReplaceDirectCharacter(char: Char) {
@@ -344,6 +378,9 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             } else {
                 ic.deleteSurroundingText(1, 0)
             }
+            // Deleting text that was already committed breaks the sentence
+            // context — don't force the next letter into a capital.
+            capitalizeNext = false
         }
     }
 
@@ -377,6 +414,9 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     override fun onReturn() {
         val ic = currentInputConnection ?: return
         commitBuffer(ic)
+        // A newline begins a new sentence. Even when the editor dispatches an
+        // action (send/search), the next typed letter starts fresh input.
+        capitalizeNext = autoCapitalize
 
         // Dispatch the Enter key action as configured by the target editor
         val actionId = editorInfo?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
@@ -632,6 +672,33 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         val req = ExtractedTextRequest().apply { hintMaxChars = 0; hintMaxLines = 1 }
         val et = ic.getExtractedText(req, 0) ?: return true
         return et.partialStartOffset >= 0 && et.partialEndOffset > et.partialStartOffset
+    }
+
+    /**
+     * Raise [capitalizeNext] when [char] ends a sentence. Sentence terminators
+     * are . ! ? and the newline; comma, colon, ellipsis, spaces and tabs merely
+     * continue the current sentence.
+     */
+    private fun markSentenceStart(char: Char) {
+        if (char == '.' || char == '!' || char == '?' || char == '\n') {
+            capitalizeNext = autoCapitalize
+        }
+    }
+
+    /**
+     * Whether input starting now begins a sentence — used on [onStartInputView].
+     * True when the field holds only whitespace before the caret (a fresh or
+     * cleared field); once real text precedes the caret the runtime flag
+     * (markSentenceStart) takes over, so mid-paragraph edits are not forced.
+     */
+    private fun shouldCapitalizeOnStart(): Boolean {
+        if (!autoCapitalize) return false
+        val ic = currentInputConnection ?: return false
+        val before = ic.getTextBeforeCursor(64, 0)
+        // Unreachable InputConnection at start most often means an empty field —
+        // cap, matching the common case.
+        if (before == null) return true
+        return before.isBlank()
     }
 
     companion object {

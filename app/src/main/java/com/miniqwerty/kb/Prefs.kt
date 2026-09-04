@@ -23,6 +23,8 @@ object Prefs {
     const val KEY_HAPTIC_ENABLED = "haptic_enabled"
     // Smart Telex: English-aware syllable validation + dictionary check at commit
     const val KEY_SMART_TELEX_ENABLED = "smart_telex_enabled"
+    // Auto-capitalize the first letter of a new sentence (. ! ? newline / field start)
+    const val KEY_AUTO_CAPITALIZE = "auto_capitalize"
     // Quick double-tap window, in ms
     const val KEY_DOUBLE_TAP_MS = "double_tap_ms"
     const val DOUBLE_TAP_DEFAULT_MS = 200L
