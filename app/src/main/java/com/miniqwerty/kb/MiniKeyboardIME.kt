@@ -236,7 +236,7 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     private fun applyNavigationBarColor() {
         val win = window?.window ?: return
         val bg = MiniKeyboardView.backgroundColor(
-            MiniKeyboardView.resolveDarkThemeFor(this))
+            MiniKeyboardView.resolvePaletteFor(this))
         win.setNavigationBarColor(bg)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             win.navigationBarDividerColor = bg

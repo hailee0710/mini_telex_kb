@@ -48,6 +48,12 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/theme_dark" />
+
+        <RadioButton
+            android:id="@+id/theme_black"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/theme_black" />
     </RadioGroup>
 
     <TextView

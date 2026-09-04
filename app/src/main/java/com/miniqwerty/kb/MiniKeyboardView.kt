@@ -103,7 +103,9 @@ class MiniKeyboardView(context: Context) : View(context) {
     private var doubleTapMs: Long = prefs.getLong(Prefs.KEY_DOUBLE_TAP_MS, Prefs.DOUBLE_TAP_DEFAULT_MS)
 
     // ── Theme state ───────────────────────────────────────────────────────
-    private var darkTheme: Boolean = resolveDarkTheme()
+    /** Active color palette, resolved from the theme pref (system follows
+     *  uiMode). One of the companion PALETTE_* constants. */
+    private var themePalette: Int = resolvePalette()
 
     // ── Dimensions (set during onSizeChanged) ─────────────────────────────
     private var viewWidth: Int = 0
@@ -206,8 +208,9 @@ class MiniKeyboardView(context: Context) : View(context) {
     // Theme
     // ─────────────────────────────────────────────────────────────────────
 
-    /** Resolve dark/light from the saved theme preference (system by default). */
-    private fun resolveDarkTheme(): Boolean = resolveDarkThemeFor(context)
+    /** Resolve the color palette from the saved theme preference (system by
+     *  default), following the system night mode. */
+    private fun resolvePalette(): Int = resolvePaletteFor(context)
 
     /** Re-read the theme preference and recolor. Called on init, when the keyboard
      *  window is shown, and on configuration change. Also re-reads the behavior
@@ -215,40 +218,59 @@ class MiniKeyboardView(context: Context) : View(context) {
     fun refreshTheme() {
         hapticEnabled = prefs.getBoolean(Prefs.KEY_HAPTIC_ENABLED, true)
         doubleTapMs = prefs.getLong(Prefs.KEY_DOUBLE_TAP_MS, Prefs.DOUBLE_TAP_DEFAULT_MS)
-        val dark = resolveDarkTheme()
-        if (darkTheme == dark) return
-        darkTheme = dark
+        val palette = resolvePalette()
+        if (themePalette == palette) return
+        themePalette = palette
         applyTheme()
         invalidate()
     }
 
     private fun applyTheme() {
-        if (darkTheme) {
-            bgPaint.color = DARK_BG_COLOR
-            keyBgPaint.color = 0xFF484C4F.toInt()
-            keyBgModifierPaint.color = 0xFF373C40.toInt()
-            keyBgPressedPaint.color = 0xFF5A5F64.toInt()
-            primaryTextPaint.color = 0xFFFFFFFF.toInt()
-            toneTextPaint.color = 0xFFFF8A50.toInt() // orange accent
-            capsLockTextPaint.color = 0xFFFF8A50.toInt() // orange accent
-            secondaryTextPaint.color = 0xFF8F8F8F.toInt()
-            functionTextPaint.color = 0xFFFFFFFF.toInt()
-            functionBoldTextPaint.color = 0xFFFFFFFF.toInt()
-            clipboardItemTextPaint.color = 0xFFFFFFFF.toInt()
-            handlePaint.color = 0x59FFFFFF.toInt()
-        } else {
-            bgPaint.color = LIGHT_BG_COLOR
-            keyBgPaint.color = 0xFFEEEEEE.toInt()
-            keyBgModifierPaint.color = 0xFFDDE0E4.toInt()
-            keyBgPressedPaint.color = 0xFFCFD3D7.toInt()
-            primaryTextPaint.color = 0xFF2A2A2A.toInt()
-            toneTextPaint.color = 0xFFE65100.toInt() // orange accent
-            capsLockTextPaint.color = 0xFFE65100.toInt() // orange accent
-            secondaryTextPaint.color = 0xFF8A8A8A.toInt()
-            functionTextPaint.color = 0xFF4A4A4A.toInt()
-            functionBoldTextPaint.color = 0xFF4A4A4A.toInt()
-            clipboardItemTextPaint.color = 0xFF2A2A2A.toInt()
-            handlePaint.color = 0x66808080.toInt()
+        when (themePalette) {
+            PALETTE_OLED -> {
+                // True black background — OLED pixels stay off. Keys sit a step
+                // above black so the label reads without a bright screen.
+                bgPaint.color = OLED_BG_COLOR
+                keyBgPaint.color = 0xFF1B1B1D.toInt()
+                keyBgModifierPaint.color = 0xFF111113.toInt()
+                keyBgPressedPaint.color = 0xFF2A2A2C.toInt()
+                primaryTextPaint.color = 0xFFFFFFFF.toInt()
+                toneTextPaint.color = 0xFFFF8A50.toInt() // orange accent
+                capsLockTextPaint.color = 0xFFFF8A50.toInt() // orange accent
+                secondaryTextPaint.color = 0xFF6E6E73.toInt()
+                functionTextPaint.color = 0xFFFFFFFF.toInt()
+                functionBoldTextPaint.color = 0xFFFFFFFF.toInt()
+                clipboardItemTextPaint.color = 0xFFFFFFFF.toInt()
+                handlePaint.color = 0x59FFFFFF.toInt()
+            }
+            PALETTE_DARK -> {
+                bgPaint.color = DARK_BG_COLOR
+                keyBgPaint.color = 0xFF484C4F.toInt()
+                keyBgModifierPaint.color = 0xFF373C40.toInt()
+                keyBgPressedPaint.color = 0xFF5A5F64.toInt()
+                primaryTextPaint.color = 0xFFFFFFFF.toInt()
+                toneTextPaint.color = 0xFFFF8A50.toInt() // orange accent
+                capsLockTextPaint.color = 0xFFFF8A50.toInt() // orange accent
+                secondaryTextPaint.color = 0xFF8F8F8F.toInt()
+                functionTextPaint.color = 0xFFFFFFFF.toInt()
+                functionBoldTextPaint.color = 0xFFFFFFFF.toInt()
+                clipboardItemTextPaint.color = 0xFFFFFFFF.toInt()
+                handlePaint.color = 0x59FFFFFF.toInt()
+            }
+            else -> { // PALETTE_LIGHT
+                bgPaint.color = LIGHT_BG_COLOR
+                keyBgPaint.color = 0xFFEEEEEE.toInt()
+                keyBgModifierPaint.color = 0xFFDDE0E4.toInt()
+                keyBgPressedPaint.color = 0xFFCFD3D7.toInt()
+                primaryTextPaint.color = 0xFF2A2A2A.toInt()
+                toneTextPaint.color = 0xFFE65100.toInt() // orange accent
+                capsLockTextPaint.color = 0xFFE65100.toInt() // orange accent
+                secondaryTextPaint.color = 0xFF8A8A8A.toInt()
+                functionTextPaint.color = 0xFF4A4A4A.toInt()
+                functionBoldTextPaint.color = 0xFF4A4A4A.toInt()
+                clipboardItemTextPaint.color = 0xFF2A2A2A.toInt()
+                handlePaint.color = 0x66808080.toInt()
+            }
         }
     }
 
@@ -278,8 +300,8 @@ class MiniKeyboardView(context: Context) : View(context) {
             KeyDef("O", null),
             KeyDef("?", "!"),
         ),
-        // Row 2 — backspace at the end, narrower than the letters grid so
-        // the row centers with a small margin (see layoutKeys())
+        // Row 2 — the eight letters, then backspace out at the far right.
+        // layoutKeys() gives it the stagger and the flushed corner position.
         listOf(
             KeyDef("A", null),
             KeyDef("S", "Z", isTone = true),
@@ -289,7 +311,7 @@ class MiniKeyboardView(context: Context) : View(context) {
             KeyDef("N", "B"),
             KeyDef("J", "K", isTone = true),
             KeyDef("M", "L"),
-            KeyDef("⌫", null, widthUnits = 1.5f, keyType = KeyType.BACKSPACE),
+            KeyDef("⌫", null, widthUnits = ROW2_BACKSPACE_UNITS, keyType = KeyType.BACKSPACE),
         ),
         // Row 3 — control row with variable-width spans, "(.) keyed to the
         // right of space. 10 total units, aligned to row 1's 10-column grid.
@@ -491,25 +513,38 @@ class MiniKeyboardView(context: Context) : View(context) {
             val rowH = if (rowIdx == keys.lastIndex) keyHeight * ROW3_HEIGHT_RATIO else keyHeight
             val y = handleHeightPx + rowIdx * keyHeight
 
-            // Compute total width-units for this row
-            val totalUnits = row.sumOf { it.widthUnits.toDouble() }.toFloat()
-
-            // The letters-layer middle row pins to row 1's 10-unit grid and
-            // centers itself: letters keep row 1's exact width, the narrower
-            // backspace leaves a small margin on each side, and the slight
-            // offset against row 1 gives a natural staggered typing feel.
-            val isMiddleLetterRow = currentLayer == KeyboardLayer.LETTERS && rowIdx == 1
-            val unitWidth = if (isMiddleLetterRow) availWidth / 10f else availWidth / totalUnits
-            val rowWidth = if (isMiddleLetterRow) unitWidth * totalUnits else availWidth
-            var x = marginX + (availWidth - rowWidth) / 2f
-
-            for (key in row) {
-                val w = key.widthUnits * unitWidth
-                key.left = x
-                key.top = y
-                key.right = x + w
-                key.bottom = y + rowH
-                x += w
+            if (currentLayer == KeyboardLayer.LETTERS && rowIdx == 1) {
+                // Letters middle row is a corner-key layout, not a centering
+                // one: the eight letters pin to row 1's grid with a quarter-
+                // unit stagger (so they keep row 1's exact width), and the
+                // backspace is pulled out to the far right — flushed to row
+                // 1's edge with a clear gap after M, so a thumb aiming at M
+                // can't drift onto it.
+                val unitWidth = availWidth / 10f
+                var x = marginX + ROW2_STAGGER_UNITS * unitWidth
+                for (key in row) {
+                    val w = key.widthUnits * unitWidth
+                    if (key.keyType == KeyType.BACKSPACE) {
+                        x = marginX + availWidth - w
+                    }
+                    key.left = x
+                    key.top = y
+                    key.right = x + w
+                    key.bottom = y + rowH
+                    x += w
+                }
+            } else {
+                // Every other row tiles the full width, sized by width-units.
+                val unitWidth = availWidth / row.sumOf { it.widthUnits.toDouble() }.toFloat()
+                var x = marginX
+                for (key in row) {
+                    val w = key.widthUnits * unitWidth
+                    key.left = x
+                    key.top = y
+                    key.right = x + w
+                    key.bottom = y + rowH
+                    x += w
+                }
             }
         }
     }
@@ -1322,24 +1357,40 @@ class MiniKeyboardView(context: Context) : View(context) {
     companion object {
         /** Keyboard background fills — shared with the IME so the system
          *  navigation bar can be tinted to match (MiniKeyboardIME). */
+        /** Keyboard background fills — shared with the IME so the system
+         *  navigation bar can be tinted to match (MiniKeyboardIME). */
         const val DARK_BG_COLOR = 0xFF292E32.toInt()
         const val LIGHT_BG_COLOR = 0xFFD5D9DE.toInt()
+        /** Pure black for OLED screens — pixels stay off when idle. */
+        const val OLED_BG_COLOR = 0xFF000000.toInt()
 
-        /** Resolve dark/light from the theme pref (system by default).
-         *  Shared with the IME for the navigation-bar tint. */
-        fun resolveDarkThemeFor(context: Context): Boolean =
+        /** Color palettes the keyboard actually draws. Distinct from the
+         *  Prefs.THEME_* values: THEME_SYSTEM resolves to LIGHT or DARK here. */
+        private const val PALETTE_LIGHT = 0
+        private const val PALETTE_DARK = 1
+        private const val PALETTE_OLED = 2
+
+        /** Resolve the palette from the theme pref (system by default, following
+         *  the current uiMode). Shared with the IME for the nav-bar tint. */
+        fun resolvePaletteFor(context: Context): Int =
             when (context.getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
                 .getInt(Prefs.KEY_THEME_MODE, Prefs.THEME_SYSTEM)) {
-                Prefs.THEME_LIGHT -> false
-                Prefs.THEME_DARK  -> true
-                else              -> (context.resources.configuration.uiMode and
-                    Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+                Prefs.THEME_LIGHT -> PALETTE_LIGHT
+                Prefs.THEME_DARK  -> PALETTE_DARK
+                Prefs.THEME_BLACK -> PALETTE_OLED
+                else              -> if ((context.resources.configuration.uiMode and
+                        Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES)
+                    PALETTE_DARK else PALETTE_LIGHT
             }
 
-        /** Background fill for the given theme — also tints the system
+        /** Background fill for the given palette — also tints the system
          *  navigation bar so the strip below the keyboard matches. */
-        fun backgroundColor(dark: Boolean): Int =
-            if (dark) DARK_BG_COLOR else LIGHT_BG_COLOR
+        fun backgroundColor(palette: Int): Int =
+            when (palette) {
+                PALETTE_DARK  -> DARK_BG_COLOR
+                PALETTE_OLED  -> OLED_BG_COLOR
+                else          -> LIGHT_BG_COLOR
+            }
 
         /** Hit-target radius factor: half the key's bounding-box diagonal times
          *  this fills the gaps between adjacent keys, so taps never fall dead.
@@ -1375,6 +1426,15 @@ class MiniKeyboardView(context: Context) : View(context) {
         /** Row 3 (control row) is 82.5% of the standard row height (75% plus
          *  a 10% bump). */
         private const val ROW3_HEIGHT_RATIO = 0.825f
+
+        /** Letters-layer middle row: the eight letter keys are offset a
+         *  quarter unit right of row 1's grid for a staggered typing feel. */
+        private const val ROW2_STAGGER_UNITS = 0.25f
+
+        /** Width of the letters-layer backspace (in row-1 units). Slightly
+         *  narrower than the old 1.5 so it can sit flushed to the far right
+         *  while leaving a clear gap after M. */
+        private const val ROW2_BACKSPACE_UNITS = 1.25f
 
         /** Max chars of a clipboard item shown on the list row (display only;
          *  keeps the label clear of the dismiss button). */

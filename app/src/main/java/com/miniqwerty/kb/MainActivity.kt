@@ -28,12 +28,14 @@ class MainActivity : Activity() {
         when (prefs.getInt(Prefs.KEY_THEME_MODE, Prefs.THEME_SYSTEM)) {
             Prefs.THEME_LIGHT -> themeGroup.check(R.id.theme_light)
             Prefs.THEME_DARK  -> themeGroup.check(R.id.theme_dark)
+            Prefs.THEME_BLACK -> themeGroup.check(R.id.theme_black)
             else              -> themeGroup.check(R.id.theme_system)
         }
         themeGroup.setOnCheckedChangeListener { _, checkedId ->
             val mode = when (checkedId) {
                 R.id.theme_light -> Prefs.THEME_LIGHT
                 R.id.theme_dark  -> Prefs.THEME_DARK
+                R.id.theme_black -> Prefs.THEME_BLACK
                 else             -> Prefs.THEME_SYSTEM
             }
             prefs.edit().putInt(Prefs.KEY_THEME_MODE, mode).apply()

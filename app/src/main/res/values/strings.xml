@@ -9,6 +9,7 @@
     <string name="theme_system">Follow system</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
+    <string name="theme_black">Black (OLED)</string>
     <string name="enable_button">Enable keyboard</string>
 
     <string name="haptics_title">Haptics</string>
