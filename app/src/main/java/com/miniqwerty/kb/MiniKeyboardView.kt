@@ -44,12 +44,12 @@ interface OnKeyActionListener {
 // ─────────────────────────────────────────────────────────────────────────────
 
 private enum class KeyType {
-    CHARACTER, BACKSPACE, SHIFT, NUMERIC, ABC, SPACE, RETURN,
+    CHARACTER, BACKSPACE, SHIFT, NUMERIC, ABC, SPACE, RETURN, SYMBOLS,
     CLIPBOARD, CLIPBOARD_ITEM, CLIPBOARD_CLOSE
 }
 
 /** Which keyboard layer is currently displayed. */
-private enum class KeyboardLayer { LETTERS, NUMERIC, CLIPBOARD }
+private enum class KeyboardLayer { LETTERS, NUMERIC, SYMBOLS, CLIPBOARD }
 
 private data class KeyDef(
     val primary: String,
@@ -60,6 +60,10 @@ private data class KeyDef(
     val keyType: KeyType = KeyType.CHARACTER,
     /** Position in the clipboard history (CLIPBOARD_ITEM keys only). */
     val index: Int = -1,
+    /** A quick double-tap repeats the primary instead of emitting the
+     *  secondary — for symbols typed in runs (emoji: ")))", "!!!", "--").
+     *  The secondary stays reachable by long-press or downward flick. */
+    val repeatable: Boolean = false,
 ) {
     /** Pixel bounds set during layout. */
     var left: Float = 0f
@@ -260,10 +264,11 @@ class MiniKeyboardView(context: Context) : View(context) {
     // typists expect them. A, E, O, D sit on keys without secondaries so the
     // Telex same-key digraphs aa/ee/oo/dd stay typeable via quick double-press.
     private val letterKeys: List<List<KeyDef>> = listOf(
-        // Row 1 — "," at the right end, "." below it
+        // Row 1 — letters only, "?" with "!" below it at the right end; the
+        // ,(.) key lives on the space row below
         listOf(
             KeyDef("X", "Q", isTone = true),
-            KeyDef("W", "?"),
+            KeyDef("W", null),
             KeyDef("E", null),
             KeyDef("R", null, isTone = true),
             KeyDef("T", null),
@@ -271,7 +276,7 @@ class MiniKeyboardView(context: Context) : View(context) {
             KeyDef("U", null),
             KeyDef("I", "P"),
             KeyDef("O", null),
-            KeyDef(",", "."),
+            KeyDef("?", "!"),
         ),
         // Row 2 — backspace at the end, narrower than the letters grid so
         // the row centers with a small margin (see layoutKeys())
@@ -286,12 +291,15 @@ class MiniKeyboardView(context: Context) : View(context) {
             KeyDef("M", "L"),
             KeyDef("⌫", null, widthUnits = 1.5f, keyType = KeyType.BACKSPACE),
         ),
-        // Row 3 — control row with variable-width spans
+        // Row 3 — control row with variable-width spans, "(.) keyed to the
+        // right of space. 10 total units, aligned to row 1's 10-column grid.
+        // Clipboard is now a long-press on ⏎, so no dedicated button crowds
+        // the space bar.
         listOf(
             KeyDef("⇧", null, widthUnits = 1.5f, keyType = KeyType.SHIFT),
             KeyDef("123", null, widthUnits = 1f, keyType = KeyType.NUMERIC),
-            KeyDef(" ", null, widthUnits = 4f, keyType = KeyType.SPACE),
-            KeyDef("📋", null, widthUnits = 1f, keyType = KeyType.CLIPBOARD),
+            KeyDef(" ", null, widthUnits = 5f, keyType = KeyType.SPACE),
+            KeyDef(",", "."),
             KeyDef("⏎", null, widthUnits = 1.5f, keyType = KeyType.RETURN),
         ),
     )
@@ -313,26 +321,71 @@ class MiniKeyboardView(context: Context) : View(context) {
             KeyDef("0", null),
         ),
         // Row 2 — frequent symbols, backspace at the end; double-tap gives
-        // the remaining symbols ( ( under ), [ under ], & under :)
+        // the remaining symbols ( ( under ), [ under ], & under :). Symbols
+        // typed in runs (emoji) are repeatable: a quick double-tap repeats
+        // the primary instead of swapping to the secondary.
         listOf(
             KeyDef("@", "~"),
-            KeyDef("!", "#"),
+            KeyDef("!", "#", repeatable = true),
             KeyDef("%", "$"),
             KeyDef(":", "&"),
-            KeyDef(")", "("),
-            KeyDef("-", "_"),
-            KeyDef("?", "+"),
+            KeyDef(")", "(", repeatable = true),
+            KeyDef("-", "_", repeatable = true),
+            KeyDef("?", "+", repeatable = true),
             KeyDef("=", ";"),
             KeyDef("/", "'"),
             KeyDef("]", "["),
             KeyDef("⌫", null, keyType = KeyType.BACKSPACE),
         ),
-        // Row 3 — control row, "," below "." on the right of the space.
-        // 11 total units so the dot matches the symbol-key width in row 2.
+        // Row 3 — control row, "=\<" to the left of the space, "," below "."
+        // to its right. 11 total units so the dot matches the symbol-key
+        // width in row 2. "=\<" opens the rare-symbol layer.
         listOf(
             KeyDef("ABC", null, widthUnits = 1.5f, keyType = KeyType.ABC),
+            KeyDef("=\\<", null, widthUnits = 1f, keyType = KeyType.SYMBOLS),
             KeyDef(" ", null, widthUnits = 6f, keyType = KeyType.SPACE),
-            KeyDef("📋", null, widthUnits = 1f, keyType = KeyType.CLIPBOARD),
+            KeyDef(".", ","),
+            KeyDef("⏎", null, widthUnits = 1.5f, keyType = KeyType.RETURN),
+        ),
+    )
+
+    // Rare-symbol layer (the =\< page): the symbols that never had a key —
+    // backquote and friends — plus the former numeric secondaries given a
+    // one-tap home here. All are primaries (direct commit, no secondary), so a
+    // quick double-tap on any of them repeats it.
+    private val symbolKeys: List<List<KeyDef>> = listOf(
+        // Row 1 — 10 wide, like the numeric digit row.
+        listOf(
+            KeyDef("`", null),
+            KeyDef("\\", null),
+            KeyDef("|", null),
+            KeyDef("\"", null),
+            KeyDef("<", null),
+            KeyDef(">", null),
+            KeyDef("{", null),
+            KeyDef("}", null),
+            KeyDef("^", null),
+            KeyDef("*", null),
+        ),
+        // Row 2 — the old numeric secondaries (now one tap) plus backspace.
+        listOf(
+            KeyDef("~", null),
+            KeyDef("#", null),
+            KeyDef("$", null),
+            KeyDef("&", null),
+            KeyDef("(", null),
+            KeyDef("[", null),
+            KeyDef("_", null),
+            KeyDef("+", null),
+            KeyDef(";", null),
+            KeyDef("'", null),
+            KeyDef("⌫", null, keyType = KeyType.BACKSPACE),
+        ),
+        // Row 3 — control row, mirrors the numeric page.
+        listOf(
+            KeyDef("ABC", null, widthUnits = 1.5f, keyType = KeyType.ABC),
+            KeyDef("123", null, widthUnits = 1f, keyType = KeyType.NUMERIC),
+            KeyDef(" ", null, widthUnits = 6f, keyType = KeyType.SPACE),
             KeyDef(".", ","),
             KeyDef("⏎", null, widthUnits = 1.5f, keyType = KeyType.RETURN),
         ),
@@ -360,6 +413,7 @@ class MiniKeyboardView(context: Context) : View(context) {
         get() = when (currentLayer) {
             KeyboardLayer.LETTERS   -> letterKeys
             KeyboardLayer.NUMERIC   -> numericKeys
+            KeyboardLayer.SYMBOLS   -> symbolKeys
             KeyboardLayer.CLIPBOARD -> clipboardRows
         }
 
@@ -1005,6 +1059,12 @@ class MiniKeyboardView(context: Context) : View(context) {
                             // stays pressed and drags move the cursor.
                             spaceCursorMode = true
                             lastCursorChars = 0
+                        } else if (downKey?.keyType == KeyType.RETURN) {
+                            // Long-press return opens the clipboard layer —
+                            // the former clipboard button lived beside space
+                            // where it was too easy to hit by mistake.
+                            onKeyActionListener?.onClipboard()
+                            downKey = null
                         } else {
                             commitSecondary(downKey!!, replace = false, shifted = shiftActive)
                             downKey = null
@@ -1078,9 +1138,13 @@ class MiniKeyboardView(context: Context) : View(context) {
         val now = SystemClock.uptimeMillis()
         // Double-tap only when the second tap is clean — a finger that drifted
         // beyond the touch slop is a new gesture, not a deliberate double-tap.
+        // Repeatable keys (")", "!", "?") never double-tap: a quick second tap
+        // repeats the primary (":))" needs no pause) and the secondary stays
+        // reachable by long-press or downward flick.
         val isDoubleTap = (currentLayer == KeyboardLayer.LETTERS ||
-            currentLayer == KeyboardLayer.NUMERIC) &&
+            currentLayer == KeyboardLayer.NUMERIC || currentLayer == KeyboardLayer.SYMBOLS) &&
             (key.secondary != null || key.keyType == KeyType.SHIFT) &&
+            !key.repeatable &&
             key === lastTapKey && !tapMoved && now - lastTapTime <= doubleTapMs
 
         if (isDoubleTap) {
@@ -1190,8 +1254,9 @@ class MiniKeyboardView(context: Context) : View(context) {
                 // Auto-release the one-character latch; caps lock persists.
                 if (shiftActive) shiftActive = false
 
-                if (currentLayer == KeyboardLayer.NUMERIC) {
-                    // Numbers and symbols commit directly, no Telex processing.
+                if (currentLayer != KeyboardLayer.LETTERS) {
+                    // Numeric and rare-symbol keys commit directly, no Telex
+                    // processing.
                     listener.onDirectCharacter(ch)
                 } else {
                     listener.onCharacter(ch)
@@ -1211,6 +1276,7 @@ class MiniKeyboardView(context: Context) : View(context) {
             }
             KeyType.NUMERIC   -> setLayer(KeyboardLayer.NUMERIC)
             KeyType.ABC       -> setLayer(KeyboardLayer.LETTERS)
+            KeyType.SYMBOLS   -> setLayer(KeyboardLayer.SYMBOLS)
             KeyType.SPACE     -> listener.onSpace()
             KeyType.RETURN    -> listener.onReturn()
             KeyType.CLIPBOARD -> listener.onClipboard()
@@ -1233,15 +1299,16 @@ class MiniKeyboardView(context: Context) : View(context) {
             }
             if (shiftActive) shiftActive = false
             if (replace) {
-                if (currentLayer == KeyboardLayer.NUMERIC) {
-                    // Double-tap: the digit was already committed directly,
-                    // so the editor replaces it (no Telex buffer involved).
+                if (currentLayer != KeyboardLayer.LETTERS) {
+                    // Double-tap: the digit/symbol was already committed
+                    // directly, so the editor replaces it (no Telex buffer
+                    // involved).
                     listener.onReplaceDirectCharacter(ch)
                 } else {
                     listener.onReplaceCharacter(ch)
                 }
-            } else if (currentLayer == KeyboardLayer.NUMERIC) {
-                // Numeric-layer symbols commit directly, no Telex processing.
+            } else if (currentLayer != KeyboardLayer.LETTERS) {
+                // Numeric / rare-symbol layer keys commit directly.
                 listener.onDirectCharacter(ch)
             } else {
                 listener.onCharacter(ch)
