@@ -6,49 +6,60 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.inputmethodservice.InputMethodService
 import android.os.Build
+import android.os.SystemClock
+import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 
 /**
  * Custom Android IME implementing a compact 3-row keyboard layout with an
- * integrated Vietnamese Telex processing engine.
+ * integrated Vietnamese Telex engine.
  *
  * ## Architecture
  * - [MiniKeyboardView] — Custom View canvas handling rendering & touch.
- * - [TelexProcessor]  — Stateless engine that transforms raw keystrokes
- *   into composed Vietnamese text.
- * - Composing buffer — Accumulates raw characters in the current word.
- *   On space/return, the resolved text is committed and the buffer is cleared.
- *   On backspace, the last raw character is removed and the display is updated.
+ * - [Driver] — Vikey's engine (`libvikey.so`). It does not compose: every key
+ *   returns an [Edit] (delete N characters, insert text) that is applied to
+ *   the editor immediately, so the word is committed as it is typed.
+ * - [lastContext] — our copy of the text before the caret. The engine counts
+ *   its deletions against the text it produced, so the cache is kept in sync
+ *   from our own edits rather than read back from the field per keystroke.
  *
  * ## Lifecycle
  * - [onCreateInputView] — inflates the custom View and attaches the listener.
- * - [onStartInputView] — resets composing state for a new input session.
- * - [onFinishInputView] — ensures any pending composing text is committed.
+ * - [onStartInputView] — resets the engine for the new field.
+ * - [onFinishInputView] — drops the engine context; nothing is left uncommitted.
  */
 class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
 
-    // ── Composing state ──────────────────────────────────────────────────
-    /** Raw character buffer for the current Telex word. */
-    private val rawBuffer = StringBuilder()
+    // ── Engine state ─────────────────────────────────────────────────────
+    /**
+     * The engine keeps its word state in C++ globals, so there is exactly one
+     * [Driver] per process (see VikeyDriver.kt). It is deliberately never
+     * closed: creating a second instance after the first was destroyed
+     * corrupts the shared state.
+     */
+    private val driver: Driver
+        get() = sharedDriver ?: Driver().also { sharedDriver = it }
 
-    /** True when the last composing display showed the raw buffer verbatim
-     *  (an English word that fell back to literal). Backspace then keeps the
-     *  literal prefix instead of re-applying the tone the popped character
-     *  had visually undone — "lantern" deletes back through "lanter", never
-     *  jumping to "lảnte". */
-    private var composingShowsRaw = false
+    /** Our copy of the text before the caret, kept in sync by [afterEdit] —
+     *  asking the editor is an IPC. Null until read from the field. */
+    private var lastContext: String? = null
 
-    /** The most recent character committed directly to the editor — a
-     *  punctuation/whitespace char (commits immediately via [onCharacter]),
-     *  or a numeric-layer char. Double-tap replace targets this when the raw
-     *  buffer is empty: the secondary replaces it in the editor, the same way
-     *  the numeric layer replaces a directly-committed digit. Null while a
-     *  Telex word owns the tail of the text. */
-    private var lastDirectChar: Char? = null
+    /** Caret position as we last left it; -1 while unknown. */
+    private var cursorPos = -1
+
+    /** Positions our own edits produced. An [onUpdateSelection] reporting one
+     *  of them is the app catching up with us, not the user moving the caret. */
+    private val recentPositions = ArrayList<Int>()
+
+    /** Raw keys typed for the word under the caret. A double-tap replays them
+     *  so the engine ends up holding the secondary instead of the primary.
+     *  Cleared when the word ends, when the engine context resets, and on
+     *  backspace (the engine then removes the last displayed letter, not the
+     *  last key, so the keys we recorded no longer describe the word). */
+    private val wordKeys = StringBuilder()
 
     /** Editor capabilities from the last [onStartInput]. */
     private var editorInfo: EditorInfo? = null
@@ -86,19 +97,20 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     private var autoCapitalize = true
 
     /** True when the next alphabetic character starts a sentence and should
-     *  be uppercased: set after a terminator (. ! ? newline), on a fresh
-     *  field, and consumed by the first letter typed. */
+     *  be uppercased: armed on a fresh field, or by a space/newline after a
+     *  sentence terminator, and consumed by the first letter typed. */
     private var capitalizeNext = false
+
+    /** True while a sentence terminator (. ! ?) has just been committed and
+     *  the following character has not yet broken it. Further terminators and
+     *  spaces keep it ("What?!", "etc..."); a letter or punctuation glued to
+     *  the terminator cancels it — "example.com" is not a sentence end. The
+     *  first space promotes it to [capitalizeNext]. */
+    private var sentenceEnded = false
 
     /** User toggle — show the clipboard paste suggestion strip above row 1
      *  (Gboard-style) when the field is empty. */
     private var suggestionStripEnabled = true
-
-    /** Known Vietnamese words, loaded once from assets; null while loading
-     *  or on load failure (commit-time dictionary check is then skipped). */
-    private var wordDict: Set<String>? = null
-
-    private var wordDictLoaded = false
 
     // Applies a theme change the moment the settings screen writes it —
     // same process, so the SharedPreferences listener fires live.
@@ -107,6 +119,8 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             Prefs.KEY_SMART_TELEX_ENABLED -> {
                 smartTelexEnabled = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
                     .getBoolean(Prefs.KEY_SMART_TELEX_ENABLED, true)
+                // Apply live: the engine reads these on every key.
+                applyEngineSettings()
             }
             Prefs.KEY_AUTO_CAPITALIZE -> {
                 autoCapitalize = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
@@ -148,7 +162,6 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             .getBoolean(Prefs.KEY_AUTO_CAPITALIZE, true)
         suggestionStripEnabled = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
             .getBoolean(Prefs.KEY_SUGGESTION_STRIP, true)
-        loadWordDict()
     }
 
     override fun onDestroy() {
@@ -173,10 +186,15 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         // Every new input session starts on the letters layer — the previous
         // layer (numeric/clipboard) is not remembered.
         keyboardView.resetLayer()
-        // Reset composing state when switching input targets
-        commitPending()
-        rawBuffer.clear()
         keyboardView.shiftActive = false
+        // A new field: the next word starts fresh. The engine's language
+        // follows the field start (Vietnamese), never the previous field.
+        resetEngine()
+        driver.language = Driver.VIETNAMESE
+        applyEngineSettings()
+        readContext()
+        cursorPos = if (info.initialSelStart >= 0) info.initialSelStart else -1
+        recentPositions.clear()
         // Re-read the current clip: while the keyboard was hidden the change
         // listener does not fire, so the suggestion strip catches up here.
         val current = readClipboardText()
@@ -185,8 +203,9 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         }
         // A fresh field (or one whose text before the caret is only whitespace)
         // starts a sentence — capitalize its first letter.
+        sentenceEnded = false
         capitalizeNext = shouldCapitalizeOnStart()
-        updateComposingText()
+        syncShiftIndicator()
         updateSuggestionStrip()
     }
 
@@ -196,25 +215,22 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
-        // The user has left the text field — commit the pending word so typed
-        // text is never lost. Explicit lifecycle end, so commit unconditionally
-        // (see commitBuffer()); do not gate on the composing-region probe,
-        // which some editors report as cleared once focus moves.
-        val ic = currentInputConnection
-        if (ic != null) {
-            commitBuffer(ic)
-        }
-        rawBuffer.clear()
-        lastDirectChar = null
+        // Every keystroke is already committed (the engine never composes), so
+        // leaving the field has nothing to flush — only the word context to
+        // drop, so the next field does not continue this word.
+        resetEngine()
+        lastContext = null
+        cursorPos = -1
+        recentPositions.clear()
         capitalizeNext = false
+        sentenceEnded = false
     }
 
     /**
-     * Fires when the target editor's selection or composing region changes.
-     * A user tap that moves the caret elsewhere while a word is pending must
-     * not leave the composing text detached from the caret — finalize the word
-     * where it stands. Our own composing updates always leave the caret at the
-     * composing end, so they never take this branch.
+     * Fires when the target editor's selection or composing region changes —
+     * including for the selection moving because of our own edits, which the
+     * app reports back. The engine counts its deletions against the text it
+     * produced, so a caret move it did not cause must reset its word.
      */
     override fun onUpdateSelection(
         oldSelStart: Int, oldSelEnd: Int,
@@ -223,30 +239,31 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     ) {
         super.onUpdateSelection(
             oldSelStart, oldSelEnd, newSelStart, newSelEnd, newComposingStart, newComposingEnd)
-        // The caret moved — the field may have become empty (or been emptied
-        // elsewhere), so re-evaluate the suggestion strip.
-        updateSuggestionStrip()
-        val ic = currentInputConnection ?: return
-        if (rawBuffer.isEmpty()) return
-
-        val caretAtComposingEnd = newComposingStart >= 0 &&
-            newSelStart == newComposingEnd && newSelEnd == newComposingEnd
-        if (!caretAtComposingEnd) {
-            // The caret moved away from the composing word (user tapped). The
-            // word must stay where it is, so finalize it in place instead of
-            // commitText at the caret, which would duplicate it elsewhere.
-            // finishComposingText (unlike commitComposingText, which moves the
-            // caret to the composing start) keeps the tapped caret untouched.
-            if (newComposingStart >= 0) {
-                @Suppress("DEPRECATION")
-                ic.finishComposingText()
+        if (newSelStart == newSelEnd) {
+            // Our own edit, reported back late: not a move.
+            val reported = recentPositions.indexOf(newSelStart)
+            if (reported >= 0) {
+                recentPositions.subList(0, reported + 1).clear()
+                updateSuggestionStrip()
+                return
             }
-            rawBuffer.clear()
-            lastDirectChar = null
-            // The caret left the composing word — the user repositioned it, so
-            // the sentence-start assumption no longer holds. Don't force a cap.
-            capitalizeNext = false
+            if (newSelStart == cursorPos) {
+                updateSuggestionStrip()
+                return
+            }
         }
+        // A real move (a tap elsewhere, or a selection): nothing to look back
+        // on. Re-read the field — it may have been emptied or changed too.
+        resetEngine()
+        cursorPos = if (newSelStart == newSelEnd) newSelStart else -1
+        recentPositions.clear()
+        readContext()
+        updateSuggestionStrip()
+        // The user repositioned the caret, so the sentence-start assumption no
+        // longer holds — don't force a capital.
+        capitalizeNext = false
+        sentenceEnded = false
+        syncShiftIndicator()
     }
 
     /**
@@ -290,75 +307,53 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     override fun onCharacter(char: Char) {
         val ic = currentInputConnection ?: return
 
-        if (TelexProcessor.shouldCommit(char)) {
-            // Commit current word and reset. Explicit user action — commit
-            // unconditionally (see commitBuffer()).
-            commitBuffer(ic)
-            ic.commitText(char.toString(), 1)
-            lastDirectChar = char
-            markSentenceStart(char)
-            updateComposingText()
-            updateSuggestionStrip()
-            return
-        }
-
-        // Append to raw buffer and resolve — the word now owns the tail of
-        // the text, so no directly-committed char is replaceable.
-        lastDirectChar = null
-        if (autoCapitalize && capitalizeNext && rawBuffer.isEmpty() && char.isLetter()) {
+        var c = char
+        if (autoCapitalize && capitalizeNext && c.isLetter() && !wordActive) {
             // First letter of a new sentence. Uppercasing is idempotent, so a
             // char already uppercased by the shift latch or caps lock passes
-            // through unchanged; Telex propagates the case into its transforms
-            // ("Aa" resolves to "Â"), so Vietnamese works too.
+            // through unchanged; the engine propagates the case into its
+            // transforms ("Aa" resolves to "Â"), so Vietnamese works too.
             capitalizeNext = false
-            rawBuffer.append(char.uppercaseChar())
-        } else {
-            rawBuffer.append(char)
+            c = c.uppercaseChar()
         }
-        // Same-tone-twice toggle ("charr" → "char") is a deliberate "this word
-        // is English, done" gesture: commit it immediately so a following
-        // letter starts a fresh word instead of re-interpreting the doubled
-        // tone key as a doubled consonant ("charr" then "z" → "charrz").
-        if (smartTelexEnabled && TelexProcessor.hasToneToggle(rawBuffer.toString())) {
-            commitBuffer(ic)
-        } else {
-            updateComposingText()
-        }
+        // A letter glued to what preceded it means the previous char was not a
+        // sentence end ("example.com") — cancel it. Punctuation updates the
+        // state instead (a terminator arms it, a space promotes it).
+        if (c.isLetter()) sentenceEnded = false else markSentenceStart(c)
+
+        type(ic, c)
+        syncShiftIndicator()
         updateSuggestionStrip()
     }
 
     override fun onReplaceCharacter(char: Char) {
-        // Double-tap: swap the last raw character for the key's secondary
-        // before re-resolving the buffer.
-        if (rawBuffer.isNotEmpty()) {
-            rawBuffer.deleteCharAt(rawBuffer.lastIndex)
-            onCharacter(char)
-            return
-        }
-        // No pending word: the first tap's primary was a punctuation char
-        // that committed directly ("x," — comma is in the shouldCommit set),
-        // so it lives in the editor, not the buffer. Delete it there and
-        // insert the secondary ("x."), mirroring the numeric layer.
+        // Double-tap: replace what the first tap inserted. Replaying the word
+        // is the only correct way — taking the last character back would delete
+        // a letter the first tap only toned ("ba" + s -> "bá", not "bá" - 1).
         val ic = currentInputConnection ?: return
-        if (lastDirectChar != null) {
-            lastDirectChar = null
-            ic.deleteSurroundingText(1, 0)
-            ic.commitText(char.toString(), 1)
-            markSentenceStart(char)
+        val displayed = letterRunLength(lastContext ?: "")
+        if (wordKeys.isEmpty() || displayed == 0) {
+            applyEdit(ic, driver.backspace(now))
+            type(ic, char)
         } else {
-            onCharacter(char)
+            wordKeys.setLength(wordKeys.length - 1)
+            wordKeys.append(char)
+            replayWord(ic, displayed)
         }
+        syncShiftIndicator()
+        updateSuggestionStrip()
     }
 
     override fun onDirectCharacter(char: Char) {
-        // Numeric layer: commit the pending word, then insert the character
-        // without passing it through the Telex buffer. Explicit user action —
-        // commit unconditionally (see commitBuffer()).
+        // Numeric / rare-symbol layer: not Telex input. End the current word
+        // first — the engine takes a digit glued to a word as part of it and
+        // then puts the whole thing back raw ("tooi5" stays "tooi5") instead
+        // of showing the resolved word.
         val ic = currentInputConnection ?: return
-        commitBuffer(ic)
-        ic.commitText(char.toString(), 1)
-        lastDirectChar = char
+        resetEngine()
+        insertDirect(ic, char.toString())
         markSentenceStart(char)
+        syncShiftIndicator()
         updateSuggestionStrip()
     }
 
@@ -366,48 +361,37 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         // Numeric-layer double-tap: the first tap already committed the digit
         // directly, so delete it in the editor and insert the symbol.
         val ic = currentInputConnection ?: return
-        commitBuffer(ic)
-        lastDirectChar = null
+        resetEngine()
+        ic.beginBatchEdit()
         ic.deleteSurroundingText(1, 0)
         ic.commitText(char.toString(), 1)
-        lastDirectChar = char
+        ic.endBatchEdit()
+        afterEdit(1, char.toString())
     }
 
     override fun onBackspace() {
         val ic = currentInputConnection ?: return
 
-        if (rawBuffer.isNotEmpty()) {
-            // Remove last character from raw buffer
-            rawBuffer.deleteCharAt(rawBuffer.lastIndex)
-            if (composingShowsRaw) {
-                // The buffer was displayed literally (English fallback) —
-                // keep the raw prefix literal so the tone the popped char
-                // visually undid does not snap back.
-                if (rawBuffer.isEmpty()) {
-                    ic.setComposingText("", 0)
-                    composingShowsRaw = false
-                } else {
-                    ic.setComposingText(rawBuffer.toString(), 1)
-                }
-            } else {
-                updateComposingText()
-            }
+        // An active selection must be deleted whole: deleteSurroundingText(1, 0)
+        // only removes characters before the selection start, which just
+        // collapses the selection to its end. commitText replaces the
+        // selection with the given text, so an empty string deletes it.
+        val selected = ic.getSelectedText(0)
+        if (!selected.isNullOrEmpty()) {
+            ic.commitText("", 0)
+            resetEngine()
+            readContext()
         } else {
-            // No composing text — delegate to the target app. An active text
-            // selection must be deleted whole: deleteSurroundingText(1, 0)
-            // only removes characters before the selection start, which just
-            // collapses the selection to its end. commitText replaces the
-            // selection with the given text, so an empty string deletes it.
-            val selected = ic.getSelectedText(0)
-            if (!selected.isNullOrEmpty()) {
-                ic.commitText("", 0)
-            } else {
-                ic.deleteSurroundingText(1, 0)
-            }
-            // Deleting text that was already committed breaks the sentence
-            // context — don't force the next letter into a capital.
-            capitalizeNext = false
+            applyEdit(ic, driver.backspace(now))
         }
+        // The engine drops the last displayed letter, not the last key, so the
+        // keys recorded for the word no longer describe it.
+        wordKeys.setLength(0)
+        // Deleting text breaks the sentence context — don't force the next
+        // letter into a capital.
+        capitalizeNext = false
+        sentenceEnded = false
+        syncShiftIndicator()
         // Deleting may have emptied the field — re-evaluate the strip.
         updateSuggestionStrip()
     }
@@ -424,51 +408,47 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     override fun onSpace() {
         val ic = currentInputConnection ?: return
 
-        if (rawBuffer.isNotEmpty()) {
-            // Resolve and commit the word, then append the space
-            val resolved = TelexProcessor.resolve(
-                rawBuffer.toString(), smart = smartTelexEnabled, dict = wordDict)
-            ic.commitText(resolved + " ", 1)
-            rawBuffer.clear()
-        } else {
-            ic.commitText(" ", 1)
+        // The engine resolves and commits the pending word itself, then emits
+        // the space.
+        type(ic, ' ')
+        // A space right after a sentence terminator starts the next sentence:
+        // arm the capital and light the Shift key. A space in the middle of a
+        // sentence leaves the state untouched.
+        if (sentenceEnded) {
+            sentenceEnded = false
+            capitalizeNext = autoCapitalize
         }
-        // The space is a direct commit, but it has no secondary key — a
-        // later double-tap must never delete it. Drop the replace target.
-        lastDirectChar = null
-        updateComposingText()
         updateSuggestionStrip()
+        syncShiftIndicator()
     }
 
     override fun onReturn() {
         val ic = currentInputConnection ?: return
-        commitBuffer(ic)
         // A newline begins a new sentence. Even when the editor dispatches an
         // action (send/search), the next typed letter starts fresh input.
         capitalizeNext = autoCapitalize
+        sentenceEnded = false
+        syncShiftIndicator()
 
         // Dispatch the Enter key action as configured by the target editor
         val actionId = editorInfo?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
             ?: EditorInfo.IME_ACTION_NONE
 
         if (actionId != EditorInfo.IME_ACTION_NONE && actionId != EditorInfo.IME_ACTION_UNSPECIFIED) {
+            // The editor acts on the field (send, search) and may clear it —
+            // nothing to look back on.
+            resetEngine()
+            cursorPos = -1
+            recentPositions.clear()
             ic.performEditorAction(actionId)
         } else {
-            ic.commitText("\n", 1)
+            type(ic, '\n')
         }
-        updateComposingText()
         updateSuggestionStrip()
     }
 
     override fun onCursorMove(delta: Int) {
         val ic = currentInputConnection ?: return
-
-        // A pending Telex word would break the buffer's assumption about the
-        // surrounding text once the cursor moves — commit it first. Explicit
-        // user action, so commit unconditionally (see commitBuffer()).
-        if (rawBuffer.isNotEmpty()) {
-            commitBuffer(ic)
-        }
 
         // Probe the cursor position: setSelection takes absolute offsets, so
         // measure how much text lies on each side of the caret.
@@ -478,6 +458,15 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         val end = cursor + (after?.length ?: 0)
         val target = (cursor + delta).coerceIn(0, end)
         ic.setSelection(target, target)
+        // The caret left the word: the engine must not look back at it.
+        resetEngine()
+        cursorPos = target
+        recentPositions.clear()
+        readContext()
+        capitalizeNext = false
+        sentenceEnded = false
+        syncShiftIndicator()
+        updateSuggestionStrip()
     }
 
     override fun onClipboard() {
@@ -499,12 +488,10 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
 
         val ic = currentInputConnection
         if (ic != null) {
-            // Paste into the focused field. A pending Telex word is committed
-            // first (explicit user action — see commitBuffer()), then the
-            // pasted text follows it.
-            commitBuffer(ic)
-            ic.commitText(text, 1)
-            updateComposingText()
+            // Paste into the focused field. A live engine word ends here (the
+            // pasted text takes over the caret), then the text follows it.
+            resetEngine()
+            insertDirect(ic, text)
         } else {
             // No focused text field — re-copy the item so it is ready for the
             // next paste.
@@ -533,8 +520,9 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         val text = clipboardHistory.getOrNull(index) ?: return
         val ic = currentInputConnection ?: return
         // The strip shows only over an empty field — insert directly, no Telex
-        // buffer involved (the paste is committed text).
-        ic.commitText(text, 1)
+        // involved (the paste is committed text).
+        resetEngine()
+        insertDirect(ic, text)
         // The pasted text now precedes the caret, so the strip hides itself.
         updateSuggestionStrip()
     }
@@ -616,132 +604,192 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     // Internal helpers
     // ─────────────────────────────────────────────────────────────────────
 
+    /** Monotonic seconds for the engine's timing rules (double space, auto switch pause). */
+    private val now: Double get() = SystemClock.uptimeMillis() / 1000.0
+
+    /** True while the caret sits inside a word (the char before it is a
+     *  letter) — the next letter continues that word, so it must not be
+     *  auto-capitalized however the sentence state looks. */
+    private val wordActive: Boolean get() = lastContext?.lastOrNull()?.isLetter() == true
+
     /**
-     * Loads the Vietnamese word list from assets on a background thread.
-     * Failure (missing asset, IO error) leaves [wordDict] null — smart mode
-     * then falls back to shape validation only.
+     * Passwords are typed exactly as pressed: no Telex, no auto switch. The
+     * editor's variation flags say so; everything else goes through the engine.
      */
-    private fun loadWordDict() {
-        if (wordDictLoaded) return
-        wordDictLoaded = true
-        Thread {
-            try {
-                val words = HashSet<String>(50_000)
-                assets.open("vi_words.txt").bufferedReader().useLines { lines ->
-                    lines.forEach { words.add(it) }
+    private val isPasswordField: Boolean
+        get() {
+            val inputType = editorInfo?.inputType ?: return false
+            return when (inputType and InputType.TYPE_MASK_CLASS) {
+                InputType.TYPE_CLASS_TEXT -> {
+                    val variation = inputType and InputType.TYPE_MASK_VARIATION
+                    variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+                        variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+                        variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
                 }
-                wordDict = words
-            } catch (e: Exception) {
-                wordDict = null
+                InputType.TYPE_CLASS_NUMBER ->
+                    inputType and InputType.TYPE_MASK_VARIATION == InputType.TYPE_NUMBER_VARIATION_PASSWORD
+                else -> false
             }
-        }.start()
+        }
+
+    /** One character typed through the engine. */
+    private fun type(ic: InputConnection, char: Char) {
+        if (isPasswordField) {
+            wordKeys.setLength(0)
+            insertDirect(ic, char.toString())
+            return
+        }
+        applyEdit(ic, driver.typeCharacter(char.toString(), now))
+        // A letter continues the word; anything else ends it.
+        if (char.isLetter()) wordKeys.append(char) else wordKeys.setLength(0)
     }
 
     /**
-     * Resolves the raw buffer through [TelexProcessor] and updates the
-     * composing region in the target editor via [InputConnection.setComposingText].
+     * Re-run the engine over [wordKeys] and swap the word displayed across
+     * [displayed] characters for the result — how a double-tap replaces a key.
+     * The engine's own state has already moved past the primary character, so
+     * the word is resolved from scratch; that also drops the engine's
+     * previous-word look-back, which only affects auto switch heuristics.
      */
-    private fun updateComposingText() {
-        val ic = currentInputConnection ?: return
-        if (rawBuffer.isEmpty()) {
-            // Clear any stale composing span
-            ic.setComposingText("", 0)
-            composingShowsRaw = false
-            return
+    private fun replayWord(ic: InputConnection, displayed: Int) {
+        resetEngine()
+        var shadow = ""
+        for (c in wordKeys) {
+            val e = driver.typeCharacter(c.toString(), now)
+            shadow = shadow.dropLast(minOf(e.deleteCount, shadow.length)) + e.text
         }
-        // Live composing display: shape validation only, no dictionary —
-        // the commit-time check corrects the final word (Gboard-style).
-        // Exception: a mid-word tone key ("masy", "mast") can make an English
-        // word pass the shape check (base → báe as ba+e), so those words get
-        // the dictionary fallback live too. Purely trailing tones ("giengs" →
-        // giễng) keep the pretty composing form until commit.
-        val buffer = rawBuffer.toString()
-        val dict = if (TelexProcessor.hasEmbeddedTone(buffer)) wordDict else null
-        val resolved = TelexProcessor.resolve(buffer, smart = smartTelexEnabled, dict = dict)
-        composingShowsRaw = resolved == buffer
-        ic.setComposingText(resolved, 1)
+        applyEdit(ic, Edit(displayed, shadow, false))
+    }
+
+    /** Length of the run of letters at the end of [s] — the word on screen. */
+    private fun letterRunLength(s: String): Int {
+        var i = s.length
+        while (i > 0 && s[i - 1].isLetter()) i--
+        return s.length - i
+    }
+
+    /**
+     * Apply an [Edit] to the editor, sending only what actually changes:
+     * "tooi" + s comes back as delete "oi" + insert "ói", so the leading "o"
+     * is kept instead of deleted and retyped.
+     */
+    private fun applyEdit(ic: InputConnection, e: Edit) {
+        var deletes = e.deleteCount
+        var insert = e.text
+        val before = lastContext
+        if (deletes > 0 && before != null && before.length >= deletes) {
+            val old = before.takeLast(deletes)
+            var same = 0
+            while (same < old.length && same < insert.length && old[same] == insert[same]) same++
+            deletes -= same
+            insert = insert.substring(same)
+        }
+        ic.beginBatchEdit()
+        if (deletes > 0) ic.deleteSurroundingText(deletes, 0)
+        if (insert.isNotEmpty()) ic.commitText(insert, 1)
+        ic.endBatchEdit()
+        afterEdit(deletes, insert)
+    }
+
+    /** Insert text that did not come from the engine — a paste, or a keystroke
+     *  in a password field. */
+    private fun insertDirect(ic: InputConnection, text: String) {
+        ic.commitText(text, 1)
+        afterEdit(0, text)
+    }
+
+    /** Keep [lastContext] and [cursorPos] in step with an edit we just made. */
+    private fun afterEdit(deleted: Int, inserted: String) {
+        val c = lastContext ?: ""
+        lastContext = (c.dropLast(minOf(deleted, c.length)) + inserted).takeLast(CONTEXT_CAP)
+        if (cursorPos >= 0) {
+            cursorPos = maxOf(0, cursorPos - deleted) + inserted.length
+            // The app reports our own edits back through onUpdateSelection,
+            // often several callbacks later — remember where we put the caret
+            // so those reports are not mistaken for the user moving it.
+            recentPositions.add(cursorPos)
+            if (recentPositions.size > RECENT_POSITIONS) recentPositions.removeAt(0)
+        }
+    }
+
+    /** Refresh [lastContext] from the field (field start, paste, a caret move). */
+    private fun readContext() {
+        lastContext = currentInputConnection?.getTextBeforeCursor(CONTEXT_CAP, 0)?.toString()
+    }
+
+    /** Drop the engine's word state — new field, caret move, paste, enter. */
+    private fun resetEngine() {
+        driver.resetContext()
+        wordKeys.setLength(0)
+    }
+
+    /**
+     * Push the app's settings into the engine. Smart Telex off is plain Telex:
+     * every transform applies, no syllable-shape check and no English auto
+     * switch, which is how the old engine behaved with the toggle off.
+     */
+    private fun applyEngineSettings() {
+        driver.autoSwitch = smartTelexEnabled
+        driver.spelling = smartTelexEnabled
+        driver.restoreIfInvalid = smartTelexEnabled
+        // "Modern" orthography would give hoà/thuý; this app has always
+        // produced hòa/thúy.
+        driver.modernOrthography = false
+        // Teencode (z = d) is hard-coded on upstream with no way to turn it off.
+        driver.teencode = false
+        driver.applySettings()
     }
 
     /**
      * Show/hide the clipboard suggestion strip: visible only when the toggle
      * is on, the clipboard holds text, and nothing precedes the caret (an
-     * empty field — the user is about to paste, Gboard-style). Unreachable
-     * input at start usually means an empty field — show, like the cap rule.
+     * empty field — the user is about to paste, Gboard-style).
      */
     private fun updateSuggestionStrip() {
         if (!::keyboardView.isInitialized) return
-        // A live Telex word (composing) counts as typed content even where the
-        // editor does not include the composing span in text-before-cursor.
-        val ic = currentInputConnection
-        val empty = rawBuffer.isEmpty() &&
-            (ic == null || ic.getTextBeforeCursor(1, 0).isNullOrEmpty())
-        val show = suggestionStripEnabled && empty && clipboardHistory.isNotEmpty()
+        val show = suggestionStripEnabled && lastContext.isNullOrEmpty() && clipboardHistory.isNotEmpty()
         keyboardView.updateSuggestions(clipboardHistory, show)
     }
 
     /**
-     * Commits the resolved raw buffer unconditionally and clears state.
-     *
-     * Used for explicit user actions (enter, cursor move). Unlike
-     * [commitPending], it does not gate on the editor's composing-region
-     * probe: editors that fail to report partial offsets would otherwise
-     * have the visible composing word silently wiped.
-     */
-    private fun commitBuffer(ic: InputConnection) {
-        val resolved = TelexProcessor.resolve(
-            rawBuffer.toString(), smart = smartTelexEnabled, dict = wordDict)
-        // Clear before touching the editor so an onUpdateSelection delivered
-        // synchronously by commitText cannot re-enter this buffer.
-        rawBuffer.clear()
-        // The committed word now owns the tail of the text — no direct char
-        // from before it is replaceable by a double-tap.
-        lastDirectChar = null
-        if (resolved.isNotEmpty()) {
-            ic.commitText(resolved, 1)
-        }
-        ic.setComposingText("", 0)
-    }
-
-    /**
-     * Commits any pending composing text to the target editor and resets state.
-     *
-     * The commit is conditional on the editor still holding a composing region:
-     * if it is gone (e.g. a chat app cleared the field while we were composing),
-     * the buffer is stale and re-inserting it would resurrect deleted text.
-     */
-    private fun commitPending() {
-        val ic = currentInputConnection ?: return
-        val resolved = TelexProcessor.resolve(
-            rawBuffer.toString(), smart = smartTelexEnabled, dict = wordDict)
-        if (resolved.isNotEmpty() && editorHasComposingRegion()) {
-            ic.commitText(resolved, 1)
-        }
-        lastDirectChar = null
-        ic.setComposingText("", 0)
-    }
-
-    /**
-     * True if the editor reports an active composing region
-     * (partialStartOffset < partialEndOffset). Editors without composing
-     * support return null extracted text — treat as "commit" (legacy behavior,
-     * their text was already inserted by setComposingText falling back to
-     * commitText).
-     */
-    private fun editorHasComposingRegion(): Boolean {
-        val ic = currentInputConnection ?: return true
-        val req = ExtractedTextRequest().apply { hintMaxChars = 0; hintMaxLines = 1 }
-        val et = ic.getExtractedText(req, 0) ?: return true
-        return et.partialStartOffset >= 0 && et.partialEndOffset > et.partialStartOffset
-    }
-
-    /**
-     * Raise [capitalizeNext] when [char] ends a sentence. Sentence terminators
-     * are . ! ? and the newline; comma, colon, ellipsis, spaces and tabs merely
-     * continue the current sentence.
+     * Advance the sentence-start state when [char] is committed directly.
+     * A terminator (. ! ?) arms [sentenceEnded] but does NOT cap yet — only a
+     * following space (or the newline itself) starts the next sentence, so a
+     * letter glued to the period ("example.com/x") stays lowercase. A
+     * non-terminator punctuation char glued to the terminator cancels it
+     * (comma/colon continue the sentence).
      */
     private fun markSentenceStart(char: Char) {
-        if (char == '.' || char == '!' || char == '?' || char == '\n') {
-            capitalizeNext = autoCapitalize
+        when {
+            char == '.' || char == '!' || char == '?' ->
+                sentenceEnded = autoCapitalize
+            char == '\n' -> {
+                // The newline is its own separator — arm immediately.
+                capitalizeNext = autoCapitalize
+                sentenceEnded = false
+            }
+            char == ' ' -> {
+                // A space right after a terminator starts the next sentence.
+                if (sentenceEnded) {
+                    sentenceEnded = false
+                    capitalizeNext = autoCapitalize
+                }
+            }
+            else -> sentenceEnded = false
+        }
+    }
+
+    /**
+     * Mirror the auto-cap state onto the keyboard's [autoShiftActive]
+     * indicator so the keys show uppercase while the next letter will be
+     * capitalized. Display only — the actual uppercase comes from the
+     * [capitalizeNext] branch in [onCharacter], and this flag never touches
+     * the View's manual shift latch. A pending word makes the next letter
+     * lowercase, so the indicator is cleared whenever the buffer holds text.
+     */
+    private fun syncShiftIndicator() {
+        if (::keyboardView.isInitialized) {
+            keyboardView.autoShiftActive = autoCapitalize && capitalizeNext && !wordActive
         }
     }
 
@@ -774,5 +822,20 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
 
         /** Label used for ClipData created when re-copying an item. */
         private const val CLIP_LABEL = "clipboard"
+
+        /** How much text before the caret we mirror; only the tail matters. */
+        private const val CONTEXT_CAP = 2000
+
+        /** How many of our own caret positions to remember for onUpdateSelection. */
+        private const val RECENT_POSITIONS = 12
+
+        /**
+         * The one engine instance for the process. Vikey keeps the current
+         * word, the previous word and its auto-switch undo data in C++ globals,
+         * so a second [Driver] in the same process corrupts the first. An
+         * IME service recreated in a live process must reuse this instance
+         * rather than build a new one.
+         */
+        private var sharedDriver: Driver? = null
     }
 }

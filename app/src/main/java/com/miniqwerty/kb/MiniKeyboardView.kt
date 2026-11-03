@@ -97,6 +97,17 @@ class MiniKeyboardView(context: Context) : View(context) {
             invalidate()
         }
 
+    /** Auto-capitalize indicator: the next letter will be uppercase because a
+     *  sentence just ended — driven by the IME, not by a tap on Shift. Purely
+     *  visual: unlike [shiftActive] it never uppercases the committed
+     *  character (the IME applies that case itself), so it can be raised and
+     *  cleared freely without fighting the user's manual shift latch. */
+    var autoShiftActive: Boolean = false
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     // ── Persisted preferences ────────────────────────────────────────────
     private val prefs = context.getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
 
@@ -997,8 +1008,8 @@ class MiniKeyboardView(context: Context) : View(context) {
             else              -> key.primary
         }
 
-        // Pressed-state bg for shift while latched OR locked on.
-        if (key.keyType == KeyType.SHIFT && (shiftActive || capsLockActive)) {
+        // Pressed-state bg for shift while latched, auto-capped, OR locked on.
+        if (key.keyType == KeyType.SHIFT && (shiftActive || capsLockActive || autoShiftActive)) {
             val padX = KEY_PAD_X_DP * resources.displayMetrics.density
             val padY = KEY_PAD_Y_DP * resources.displayMetrics.density
             canvas.drawRoundRect(
@@ -1024,10 +1035,11 @@ class MiniKeyboardView(context: Context) : View(context) {
         // Space bar is deliberately unlabeled — a wide blank key.
     }
 
-    /** Apply shift/caps-lock case: uppercase the first char of [s]. Applies to
-     *  both the primary label and the secondary (double-tap) label. */
+    /** Apply shift/caps-lock/auto-cap case: uppercase the first char of [s].
+     *  Applies to both the primary label and the secondary (double-tap)
+     *  label. */
     private fun resolveCase(s: String): String {
-        if ((!shiftActive && !capsLockActive) || s.isEmpty()) return s
+        if ((!shiftActive && !capsLockActive && !autoShiftActive) || s.isEmpty()) return s
         val first = s[0]
         return if (first.isLowerCase()) first.uppercaseChar() + s.substring(1)
         else s
