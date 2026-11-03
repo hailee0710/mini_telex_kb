@@ -32,7 +32,8 @@ VIEW_FILE = REPO / "app/src/main/java/com/miniqwerty/kb/MiniKeyboardView.kt"
 CORPUS = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / "tools/data/vi_50k.txt"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Telex model (mirrors TelexProcessor.kt)
+# Telex model — an approximation used only to score typing effort here; it is
+# not the keyboard's engine (that is Vikey's, in app/src/main/cpp/engine/)
 # ─────────────────────────────────────────────────────────────────────────────
 
 VOWEL_DIGRAPHS = {

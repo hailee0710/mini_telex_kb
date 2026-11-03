@@ -4,64 +4,91 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project
 
-Android custom keyboard (IME) with a compact 3-row QWERTY layout and a built-in Vietnamese Telex input engine, including an English-aware "Smart Telex" mode backed by a word dictionary. Beyond the keyboard itself there is one settings screen (theme mode, haptics, Smart Telex, double-tap window), which is also the app's launcher entry point. minSdk 21, compileSdk/targetSdk 34, JDK 17.
+Android custom keyboard (IME) with a compact 3-row QWERTY layout and a built-in Vietnamese Telex engine — Vikey's engine (itself derived from OpenKey), vendored under `app/src/main/cpp/` and compiled into `libvikey.so`. Beyond the keyboard itself there is one settings screen (theme mode, haptics, Smart Telex, double-tap window), which is also the app's launcher entry point. minSdk 21, compileSdk/targetSdk 34, JDK 17.
 
-Toolchain pins: AGP 8.2.2, Kotlin 1.9.22, Gradle 8.5. Only external dependency is `androidx.core:core-ktx`.
+Toolchain pins: AGP 8.2.2, Kotlin 1.9.22, Gradle 8.5, NDK 27.2.12479018, CMake 3.22.1. Only external dependency is `androidx.core:core-ktx`.
+
+The engine is **GPLv3**, so the combined work is too — see `THIRD-PARTY-NOTICES.md`. The root `LICENSE` still says MIT and must change before any release.
 
 ## Build
 
 The `gradlew` script is **not committed** — only `gradle/wrapper/gradle-wrapper.properties` is. CI generates the wrapper (`gradle wrapper --gradle-version 8.5`) before building; do the same locally if `./gradlew` is missing.
 
+The APK carries native code, so the build needs NDK 27.2.12479018 and CMake 3.22.1 (`sdkmanager --install "ndk;27.2.12479018" "cmake;3.22.1"`; AGP can fetch them itself once the SDK licences are accepted). ABIs are `arm64-v8a` and `x86_64` only — the engine typedefs `Uint64` as `unsigned long`, which is 32-bit on `armeabi-v7a`.
+
 ```bash
 gradle wrapper --gradle-version 8.5   # one-time, if ./gradlew missing
 ./gradlew assembleDebug               # build debug APK
+./gradlew assembleRelease             # R8 build; keeps VikeyDriver (JNI symbol names)
 ./gradlew lint                        # Android lint
-./gradlew :app:testDebugUnitTest      # JVM unit tests (TelexProcessor, backspace sim)
 ```
 
-Output APK: `app/build/outputs/apk/debug/`. JVM unit tests live in `app/src/test/java/com/miniqwerty/kb/`:
+Output APK: `app/build/outputs/apk/debug/`.
 
-- `TelexProcessorTest` — mid-word tone keys, English fallback, `hasEmbeddedTone`.
-- `TelexTonePlacementTest` — the 7 `findMainVowelIndex` rules (incl. ươ-cluster, gi/qu, oa/oe/uy).
-- `TelexVowelTransformsTest` — every digraph, the `uow` triple, undo, case handling.
-- `TelexToneKeysTest` — full vowel×tone mark matrix, toggle/replace/spill.
-- `TelexSmartShapeTest` — shape validation, dict fallback, `shouldCommit`.
-- `TelexBackspaceTest` — simulates the IME composing/backspace state machine (minus the `InputConnection`).
+The only automated tests are the engine's, which build `libvikey.so` for the host from the vendored sources and drive `VikeyDriver.kt` on the JVM:
 
-CI (`app/.github/workflows/build.yml`) builds `assembleDebug` on push/PR and uploads the APK artifact.
+```bash
+JAVA_HOME=/path/to/jdk tools/engine-test/jni-smoke.sh
+```
+
+It needs a JDK with `include/jni.h` (a JRE is not enough) plus `g++`, and takes the Kotlin jars from `~/.gradle/caches` — run `./gradlew assembleDebug` once first. `tools/engine-test/README.md` lists what it covers.
+
+CI (`.github/workflows/build.yml`) installs the NDK and CMake, builds `assembleDebug`, runs the engine tests and uploads the APK artifact.
 
 ## Architecture
 
 Source files, each with one clear job:
 
-- `app/src/main/java/com/miniqwerty/kb/MiniKeyboardIME.kt` — `InputMethodService` subclass. Owns the composing buffer and all interaction with the target app via `InputConnection`.
+- `app/src/main/java/com/miniqwerty/kb/MiniKeyboardIME.kt` — `InputMethodService` subclass. Owns the engine session and all interaction with the target app via `InputConnection`.
 - `app/src/main/java/com/miniqwerty/kb/MiniKeyboardView.kt` — custom `View` that draws the keyboard on a `Canvas` and handles touch. Emits events through the `OnKeyActionListener` interface (defined in this file). No Android XML layouts — everything is drawn.
-- `app/src/main/java/com/miniqwerty/kb/TelexProcessor.kt` — stateless `object`; pure text transformation, no Android dependencies. Unit-testable without instrumentation.
-- `app/src/main/java/com/miniqwerty/kb/MainActivity.kt` — settings screen (plain `Activity`, no AppCompat): theme mode radio group, switches for haptics / Smart Telex, double-tap window slider, "enable keyboard" shortcut to `Settings.ACTION_INPUT_METHOD_SETTINGS`. Also the launcher entry point.
+- `app/src/main/java/com/miniqwerty/kb/VikeyDriver.kt` — `Driver`/`Edit` wrapper over the JNI face of the engine. Exactly one `Driver` may exist per process; the IME creates it lazily and never closes it.
+- `app/src/main/cpp/` — the vendored engine (`engine/`, GPLv3), `vikey_jni.cpp` (the JNI surface and the character → key map) and `CMakeLists.txt`. Read `app/src/main/cpp/README.md` before touching any of it — it records the deliberate deviations from upstream.
+- `app/src/main/java/com/miniqwerty/kb/MainActivity.kt` — settings screen (plain `Activity`, no AppCompat): theme mode radio group, switches for haptics / Smart Telex / auto-capitalize, double-tap window slider, "enable keyboard" shortcut to `Settings.ACTION_INPUT_METHOD_SETTINGS`. Also the launcher entry point.
 - `app/src/main/java/com/miniqwerty/kb/Prefs.kt` — shared preference keys, defaults, and constants shared by the IME and the settings screen (`miniqwerty_kb_prefs`).
-- `app/src/main/assets/vi_words.txt` — Vietnamese word list for the Smart Telex dictionary check (one lowercase word per line). Generated from `tools/data/vi_50k.txt` with `python3 tools/gen_dict.py` (Vietnamese letters only — `f j w z` and foreign characters dropped, ~40k words).
 
 ### Composing flow
 
-The IME keeps a raw character buffer (`rawBuffer`) for the current word. Every keystroke appends to it and calls `TelexProcessor.resolve()` on the **entire buffer** (the processor is stateless and re-resolves from scratch each time), then shows the result via `InputConnection.setComposingText()`. The resolved text is committed on space/return/`shouldCommit` punctuation (`. , ! ? : ; …` plus whitespace) and on explicit user actions (`onCursorMove`, numeric-layer `onDirectCharacter`) via `commitBuffer`, which commits unconditionally — editors that fail to report composing partial offsets must not lose the visible word. `onFinishInputView` (focus lost) commits unconditionally via `commitBuffer` — leaving the text field must never lose a typed word. Only `onStartInputView`'s lifecycle commit is conditional on the editor still holding a composing region (`editorHasComposingRegion` probes `ExtractedText` partial offsets): if an app cleared the field while composing (e.g. chat send button), the stale buffer is dropped instead of re-inserted. Space-bar long-press is a cursor mode: horizontal drag moves the caret via `onCursorMove` (commits pending word first). Tapping elsewhere in the field to move the caret is caught by `onUpdateSelection`: when the caret leaves the composing end while a word is pending, the composing text is finalized in place via `finishComposingText` (which keeps the tapped caret, unlike `commitComposingText`) and the buffer cleared — the caret is no longer at the word, so `commitText` at the caret would duplicate it in the wrong place. Backspace removes the last raw character from the buffer rather than deleting from the editor; only when the buffer is empty does it delegate to `deleteSurroundingText`. `onReplaceCharacter` pops the last raw char and re-appends its replacement (double-tap); `onDirectCharacter` commits pending text and inserts the character directly (numeric layer). Numeric-layer double-tap uses `onReplaceDirectCharacter`: the first tap committed the digit directly, so the editor deletes it (`deleteSurroundingText`) and inserts the symbol.
+The engine never composes. `Driver.typeCharacter()` / `backspace()` return an `Edit` (delete N characters before the caret, then insert text) computed from the engine's C++ word state, and the IME applies it at once with `deleteSurroundingText` + `commitText`, inside one `beginBatchEdit`/`endBatchEdit`. Text is therefore committed as it is typed — no `setComposingText`, no underline, and nothing is left pending at space, enter or focus loss.
+
+The engine counts its deletions against the text it produced, so the IME mirrors the text before the caret in `lastContext` and keeps it in sync from its own edits (`afterEdit`) instead of reading the field back on every keystroke; a new field, a paste and a caret move re-read it. `applyEdit` also trims the common prefix of the old tail and the new text, so `tooi` + `s` deletes only `oi` and inserts `ói`.
+
+`onUpdateSelection` treats a caret move the IME did not cause as the end of the word: `recentPositions` holds the positions our own edits produced (apps report them back, often several callbacks later) and anything else resets the engine, re-reads `lastContext` and drops the sentence state.
+
+Backspace is the engine's: it removes the last *displayed* letter, not the last key, so `tiếng` + ⌫ gives `tiến`. An active selection is deleted whole first (`commitText("")`), and an empty field falls through to `deleteSurroundingText(1, 0)`.
+
+Double-tap replays the word. `backspace` + retype would delete a letter the first tap only toned (`ba` + `s` → `bá`, so a second tap on that key must give `baz`, not `bz`), so `wordKeys` records the raw keys of the current word and `onReplaceCharacter` re-runs the engine over them with the secondary swapped in, then swaps the displayed word for the result. `wordKeys` is cleared when a non-letter ends the word, and on backspace — there the engine's state no longer matches the keystrokes, so a double-tap falls back to backspace + type.
+
+The numeric and rare-symbol layers (`onDirectCharacter`) end the word and insert the character without the engine: a digit glued to a word is part of it to the engine, which then restores the whole thing raw (`tooi5` → `tooi5`). Their double-tap (`onReplaceDirectCharacter`) deletes the committed character and inserts the symbol.
+
+Password fields bypass the engine entirely — no Telex, no auto switch; the keystroke is committed exactly as pressed.
+
+Space-bar long-press is a cursor mode: horizontal drag moves the caret via `onCursorMove`, which resets the engine (the word ends where the caret was).
 
 Shift is latched (one character), not held: `MiniKeyboardView` uppercases the character before calling `onCharacter`, then auto-releases. Double-tapping Shift toggles sticky caps lock (`capsLockActive`, drawn as ⇪).
 
-Quick double-tap on the same key replaces the last raw buffer character with the key's secondary character. The window is user-adjustable in settings (`Prefs.KEY_DOUBLE_TAP_MS`, 100–500 ms, default 200). The second tap must be clean (no drift beyond the touch slop) to count as a double-tap — a moved finger is a new gesture. Backspace repeats while held: initial delay 400 ms, then every 60 ms.
+Quick double-tap on the same key replaces the character the first tap inserted with the key's secondary character. The window is user-adjustable in settings (`Prefs.KEY_DOUBLE_TAP_MS`, 100–500 ms, default 200). The second tap must be clean (no drift beyond the touch slop) to count as a double-tap — a moved finger is a new gesture. Backspace repeats while held: initial delay 400 ms, then every 60 ms.
 
-Hard keys also flow through the Telex pipeline: `onKeyDown` intercepts DEL/ENTER/SPACE and routes printable characters into `onCharacter`.
+Hard keys also flow through the engine: `onKeyDown` intercepts DEL/ENTER/SPACE and routes printable characters into `onCharacter`.
 
-### Telex rules (in TelexProcessor)
+### Telex rules (in the engine)
 
-Vowel transforms: `aw→ă aa→â ee→ê oo→ô ow→ơ uw→ư uow→ươ uiw→ưi dd→đ` (triple digraphs checked before pairs; `uow`/`uiw` are not applied after `q` — no Vietnamese word starts `qư`, so `quowf` resolves to `quờ`). The `uiw` triple lets a w typed after the i still spell ư: `guiwr` → `gửi`, parallel to canonical `guwir`. Special-vowel nuclei are spelled with explicit digraphs — there is no implicit `ie`/`uo`: `iê` = `iee` (`tiếng` = `tieengs`), `uô` = `uoo` (`uống` = `uoongs`), `yê` = `yee`, `uâ` = `uaa`, `uyê` = `uyee`, `ươ` = `uow`. Plain `tiengs` falls back to `tíng` (first vowel, rule 7), which is why the double letter is load-bearing. Tone keys: `s f r x j` (sắc/huyền/hỏi/ngã/nặng); `z` is not in the tone set. Tone keys apply mid-word too, before the word is complete: `masy` → `máy`, `mast` → `mát` (the engine pulls embedded tone keys into the trailing tone pipeline). A tone key before any vowel is an onset consonant (`sad`, `run`) and a doubled tone-key letter is a consonant, not a tone (`office`, `message`, `carry`) — Vietnamese never doubles letters, so only English loanwords are affected. Same tone key twice toggles the tone off and spills the key as a literal; a different tone key replaces the previous one (no literal). With Smart Telex on, the IME commits the toggled word immediately — the toggle is a deliberate "this word is English, done" gesture, so a following letter starts a fresh word instead of re-interpreting the doubled tone key as a doubled consonant (`charr` commits `char`, then `z` spells `charz`; `charr` then `y` spells `chary`). A doubled tone-key followed by a vowel is a real English doubled consonant and stays (`carry`, `office`, `message`). Typing a third copy of a transform's last letter undoes the transform and makes the rest of the word literal: `dooor` → door, `goood` → good, `uww` → uw, `oww` → ow, `uoww` → uow, `forr` → for — trailing tone keys after an undo stay literal. Vietnamese never uses triple letters, so this cannot misfire. The gesture is this keyboard's equivalent of ibus-bamboo's Shift+Space restore-word. `findMainVowelIndex` implements Vietnamese orthographic tone-placement rules, in priority order: 1) special vowels — but in the `ươ` cluster the tone lands on `ơ` (`người`, `được`) — 2) triphthong middle, 3) gi-digraph (i is a consonant, tone on the following vowel: `gió`, `già`), 4) qu-digraph (u is a consonant: `quả`, `quá`), 5) oa/oe/uy with a closing consonant tone the second vowel (`toàn`, `hoàng`, `khoét`, `suýt` — modern style without a coda tones the first vowel: `hòa`, `khỏe`, `thúy`), 6) i/y/u/o-ending diphthong first vowel, 7) default first vowel.
+The engine is Vikey's, so the Telex rules live in `app/src/main/cpp/engine/` — standard Telex: `aw→ă aa→â ee→ê oo→ô ow→ơ uw→ư uow→ươ uiw→ưi dd→đ`, tone keys `s f r x j`, tone placement by Vietnamese orthography (the `ươ` cluster, `gi`/`qu` digraphs, and the oa/oe/uy coda rule), triple-letter undo (`dooor` → `door`), and the doubled-tone-key toggle (`charr` → `char`). `vUseModernOrthography` is off, so placement is the older style: `hòa`, `khỏe`, `thúy` (not `hoà`, `thoại`-style `thuý`).
+
+Behaviour that differs from the engine this app used to ship, all accepted:
+
+- no composing text or underline — every keystroke is committed immediately (above);
+- backspace removes the last displayed letter (`tiếng` → `tiến`) rather than the last key;
+- `z` removes the tone (`charz` → `cha`) instead of spilling a literal;
+- the word list and the English auto switch are the engine's own compiled-in data, not `assets/vi_words.txt`;
+- `[` and `]` are plain symbols — upstream maps them to ơ/ư, but this layout types those with `ow`/`uw` and needs both brackets (`vikey_jni.cpp` leaves them unmapped).
 
 ### Smart Telex
 
-`TelexProcessor.resolve(raw, smart, dict)` wraps the core Telex resolution with English-aware validation: when `smart` is on and the resolved output differs from the raw input, the output is checked against a Vietnamese syllable-shape parser (`isValidVietnameseSequence`, a backtracking parse over onset/nucleus/coda tables). If the shape is invalid, the raw input is returned unchanged — English words with impossible Vietnamese clusters (`cluster`, `good`, `pool`, `zoo`, `fix`) show literally while typing. When `dict` (a `Set<String>`) is also passed, a resolved word absent from the dictionary falls back to raw at commit time (`for` — `fỏ` is not a dictionary word — commits as `for`; `office` likewise). Output the user explicitly forced literal (an undo or a tone-key spill) is always honored, dictionary or not.
+The settings toggle maps to three engine flags (`MiniKeyboardIME.applyEngineSettings`): on → `vCheckSpelling`, `vRestoreIfWrongSpelling` and auto switch on; off → all three off, i.e. plain Telex (every transform applies, no shape check, no auto switch, so `fix` → `fĩ`). `vTeencode` stays off (upstream hard-codes it on with no UI) and so does `vUseModernOrthography`.
 
-The IME calls `resolve` with `dict = null` from `updateComposingText` (shape validation applies live while composing) — except when the buffer holds a mid-word tone key (`TelexProcessor.hasEmbeddedTone`), in which case the dictionary is passed live too, because a mid-word tone can push an English word through the shape check as multiple syllables (`base` → `báe` parses as ba+e). Purely trailing tones keep the pretty composing form until commit. The loaded dictionary is always passed from `commitBuffer` / `commitPending` / `onSpace` (Gboard-style correction at commit). `MiniKeyboardIME.loadWordDict()` loads `assets/vi_words.txt` into a `HashSet` on a background thread; on failure the dictionary check is skipped and only shape validation applies. Every Vietnamese word and every typing prefix of one parses, so there is no flicker for Vietnamese input. Toggling Smart Telex off restores the exact legacy behavior.
+With Smart Telex on, a shape that is not a Vietnamese syllable is restored to the keys typed at the word break, and the engine's auto switch moves between English and Vietnamese as words are typed: `cluster`, `fix`, `for`, `server`, `door`, `bus`, `this`, `carry`, `office`, `password` all stay literal, while `tieengs` → `tiếng` and a Vietnamese word typed right after an English one converts back. A resolved word the engine's word data does not know is also restored (`aw`, `dd`, `uoow` stay as typed).
 
-Documented limitations (same shape as ibus-bamboo's auto-restore): `door` → `dổ`, `bus` → `bú`, `this` → `thí` still tone when typed literally, because the toned forms are real dictionary words and the raw sequences are identical (`door` and `dổ` are both d-o-o-r) — type the undo form instead (`dooor`, `buss`, `thiss`, `forr`). Typing any doubled tone-key (s/f/r/x/j) trips the toggle commit, so doubled-consonant English words split mid-word: `carry` → car + y = cary, `office` → of + ice = ofice, `message` → mes + age = mesage, `terrible` → ter + ible = terible, `password` → pas + word = pasword. Words outside the top-50k list (e.g. `giễng`) fall back to raw at commit; Smart Telex off restores the legacy behavior. Bare Telex fragments commit raw when the resolved form is not a word (`uow` + space stays `uow`; `uowm` → `ươm` works).
+The keyboard has no VI/EN key, so the language is set to Vietnamese at every field start (`onStartInputView`) and otherwise left to the engine's auto switch; there is no on-screen language indicator.
 
 ### Keyboard layout
 
@@ -69,7 +96,7 @@ Defined as `List<List<KeyDef>>` literals in `MiniKeyboardView` — `letterKeys` 
 
 Letters layer, 3 rows. Row 1 is 10 columns — `X(Q) W E R T H(Y) U I(P) O ?(!)` — question mark with exclamation below it at the right end. Row 2 is `A S(Z) D F(C) G(V) N(B) J(K) M(L)` at 1 unit each, with ⌫ (1.25 units) pulled out to the far right. The letters pin to row 1's 10-unit grid with a quarter-unit stagger off the left edge (so they keep row 1's exact width and get a natural staggered typing feel); the backspace flushes against row 1's right edge, leaving a half-unit gap after M so a thumb aiming at M can't drift onto it. The layout is QWERTY-familiar by design: `tools/layout_analyzer.py` optimizes effort + λ·displacement from each letter's QWERTY home (λ=0.5), so every key sits at or next to its QWERTY position and the 9 rarest letters (Q Y P Z C V B K L) become double-tap secondaries on the key nearest their QWERTY home. Tone keys X, S, F, R, J sit where Vietnamese Telex typists expect them. A, E, O, D sit on keys without secondaries so the Telex same-key digraphs `aa ee oo dd` stay typeable via quick double-press. Row 3 uses fractional `widthUnits` spans (shift 1.5, `123` 1, space 5, `,(.)` 1, return 1.5) — 10 total units so the row aligns to row 1's column grid, and it is 75% of the standard row height (`effectiveRows` = row count − 1 + 0.75, so both 3-row layers measure 2.75 row-units; the clipboard layer uses the letters-layer count to keep the window height stable). The `,(.)` key (comma, period by double-tap/long-press/flick) sits immediately right of the space bar. `123` switches to the numeric layer; `ABC` switches back.
 
-Numeric layer: row 1 is 10 digits with no secondaries — `1 2 3 4 5 6 7 8 9 0`. Row 2 is 11 units of frequent symbols plus ⌫: `@ ! % : ) - ? = / ]` with double-tap secondaries `~ # $ & ( _ + ; ' [` (`(` under `)`, `[` under `]`, `&` under `:`). Row 3 spans `ABC` (1.5), `=\<` (1), space (6), `.` (1, `,` double-tap), `⏎` (1.5) — 11 total units so the dot matches the row-2 key width. The `.` key sits immediately right of the space bar (mirroring the letters layer's `,(.)`); `=\<` flips to the rare-symbol page. Numeric-layer characters commit directly via `onDirectCharacter` (bypass the Telex buffer). Rare symbols (`` ` \ | " < > { } ^ * ``) open on the `=\<` page.
+Numeric layer: row 1 is 10 digits with no secondaries — `1 2 3 4 5 6 7 8 9 0`. Row 2 is 11 units of frequent symbols plus ⌫: `@ ! % : ) - ? = / ]` with double-tap secondaries `~ # $ & ( _ + ; ' [` (`(` under `)`, `[` under `]`, `&` under `:`). Row 3 spans `ABC` (1.5), `=\<` (1), space (6), `.` (1, `,` double-tap), `⏎` (1.5) — 11 total units so the dot matches the row-2 key width. The `.` key sits immediately right of the space bar (mirroring the letters layer's `,(.)`); `=\<` flips to the rare-symbol page. Numeric-layer characters commit directly via `onDirectCharacter` (bypass the engine). Rare symbols (`` ` \ | " < > { } ^ * ``) open on the `=\<` page.
 
 ### Touch handling
 
@@ -89,4 +116,4 @@ Key presses vibrate via `performHapticFeedback` on `ACTION_DOWN` (`KEYBOARD_TAP`
 
 ### IME wiring
 
-`app/src/main/AndroidManifest.xml` declares the service with `BIND_INPUT_METHOD` permission and `MainActivity` as the MAIN/LAUNCHER entry point; the application carries a launcher icon (`mipmap/ic_launcher`, adaptive + legacy densities) and `@string/app_name`. `app/src/main/res/xml/method.xml` defines two subtypes: `en_US` and `vi_VN` (Telex). To test on a device: install, then enable the keyboard in Settings → System → Languages & input (the settings screen has a shortcut button).
+`app/src/main/AndroidManifest.xml` declares the service with `BIND_INPUT_METHOD` permission and `MainActivity` as the MAIN/LAUNCHER entry point; the application carries a launcher icon (`mipmap/ic_launcher`, adaptive + legacy densities) and `@string/app_name`. `app/src/main/res/xml/method.xml` defines two subtypes: `en_US` and `vi_VN` (Telex) — the IME itself starts every field in Vietnamese, the subtype is only what the system lists. To test on a device: install, then enable the keyboard in Settings → System → Languages & input (the settings screen has a shortcut button).

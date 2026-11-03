@@ -1,6 +1,6 @@
 # Mini Qwerty Keyboard
 
-A compact 3-row QWERTY Android keyboard (IME) with a built-in Vietnamese **Telex** input engine and an English-aware **Smart Telex** mode backed by a ~40k-word dictionary.
+A compact 3-row QWERTY Android keyboard (IME) with a built-in Vietnamese **Telex** engine and an English-aware **Smart Telex** mode. The engine is [Vikey](https://github.com/tonyminibot/Vikey)'s (based on OpenKey), compiled from source into the app.
 
 **Zero permissions. Zero network.** The keyboard reads only what you type and sends it nowhere.
 
@@ -8,8 +8,9 @@ A compact 3-row QWERTY Android keyboard (IME) with a built-in Vietnamese **Telex
 
 ## Features
 
-- **Smart Telex** — type Vietnamese with Telex, English words type literally. A dictionary + syllable-shape validator keeps English looking English while Vietnamese composes with live accents.
-- **Full Telex support** — all 6 tone keys, every vowel digraph, correct orthographic tone placement, mid-word tone keys, triple-letter undo.
+- **Smart Telex** — type Vietnamese with Telex, English words type literally. A syllable-shape check plus the engine's word data and auto switch keep English looking English; Vietnamese typed after it converts back.
+- **Full Telex support** — all 5 tone keys, every vowel digraph, correct orthographic tone placement, mid-word tone keys, triple-letter undo.
+- **Auto-capitalize** — the first letter of a sentence is uppercased, and Shift lights up to show it.
 - **Compact 3-row QWERTY** — the 9 rarest letters are quick double-tap secondaries on their QWERTY home keys; tone keys `X S F R J` sit where Telex typists expect them.
 - **Numeric/symbol layer** with symbol double-tap secondaries.
 - **Light/dark/system theme**, haptics toggle, adjustable keyboard height (drag handle), adjustable double-tap window.
@@ -44,15 +45,21 @@ ow → ơ    uw → ư    dd → đ    uow → ươ
 Special nuclei: `iê` = `iee`, `uô` = `uoo`, `yê` = `yee`, `uâ` = `uaa`, `uyê` = `uyee`, `ươ` = `uow`.
 
 Type the digraph's last letter a third time to undo it — the word becomes literal:
-`dooor` → `door`, `goood` → `good`, `uww` → `uw`, `uoww` → `uow`, `forr` → `for`.
+`dooor` → `door`. English words need no undo: with Smart Telex on they are restored to the
+keys typed when the word ends (`good`, `for`, `bus` stay as typed).
 
 Same tone key twice toggles the tone off; a different tone key replaces the previous one.
 
 ## Smart Telex
 
-With Smart Telex on, a resolved Telex output is checked against Vietnamese syllable shape. Impossible shapes fall back to the raw input, so English words like `cluster`, `good`, `pool` type literally. At commit time the result is also checked against a ~40k Vietnamese word list.
+With Smart Telex on, an output that is not a valid Vietnamese syllable is restored to the keys
+typed as soon as the word ends, so `cluster`, `good`, `pool`, `fix`, `door`, `bus`, `this`,
+`carry`, `office` and `password` all type literally. The engine's auto switch also moves
+between Vietnamese and English by itself — an English word typed after Vietnamese stays
+English, and the next Vietnamese word converts back.
 
-Typing quirks it can't fix (same as ibus-bamboo's auto-restore): `door`, `bus`, `this` still tone because the toned form is a real dictionary word. Use the undo form instead: `dooor`, `buss`, `thiss`, `forr`.
+With Smart Telex off the keyboard is plain Telex: every transform applies and there is no
+shape check or auto switch, so `fix` becomes `fĩ`.
 
 ## Keyboard layout
 
@@ -65,21 +72,28 @@ Quick double-tap on a key replaces the last character with the key's secondary. 
 
 ## Settings
 
-- Theme: system / light / dark
+- Theme: system / light / dark / black (OLED)
 - Haptics on/off
 - Smart Telex on/off
+- Auto-capitalize on/off
+- Clipboard suggestion strip on/off
 - Double-tap window (100–500 ms)
 
 ## Build
 
-Prerequisites: JDK 17, Android SDK, Gradle 8.5.
+Prerequisites: JDK 17, Android SDK, Gradle 8.5, and — because the engine is native code — NDK 27.2.12479018 with CMake 3.22.1 (`sdkmanager --install "ndk;27.2.12479018" "cmake;3.22.1"`). ABIs are `arm64-v8a` and `x86_64`.
 
 ```bash
 gradle wrapper --gradle-version 8.5   # if ./gradlew missing (not committed)
 ./gradlew assembleDebug               # debug APK
-./gradlew :app:testDebugUnitTest      # unit tests (77 tests: Telex, tone, vowels, Smart Telex, backspace sim)
 ./gradlew bundleRelease               # release AAB for publishing
+
+# engine tests: builds libvikey.so for the host and drives the Kotlin bridge on the JVM
+JAVA_HOME=/path/to/jdk tools/engine-test/jni-smoke.sh
 ```
+
+The engine test needs a JDK with `include/jni.h` (not just a JRE) and `g++`; run
+`./gradlew assembleDebug` once first so its Kotlin jars are in the Gradle cache.
 
 Release signing reads `miniqwerty.*` properties from `~/.gradle/gradle.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`); without them the release build is unsigned, so plain clones still build.
 
@@ -89,6 +103,10 @@ Output APKs: `app/build/outputs/apk/`, AAB: `app/build/outputs/bundle/release/`.
 
 No `uses-permission` entries in the manifest. No internet permission, no telemetry, no analytics. Keystrokes never leave the device.
 
-## License
+## Engine and license
 
-[MIT](LICENSE)
+The Vietnamese engine in `app/src/main/cpp/` is [Vikey](https://github.com/tonyminibot/Vikey)'s,
+itself derived from [OpenKey](https://github.com/tuyenvm/OpenKey), vendored verbatim at
+upstream commit `783bf95`. It is **GPLv3**, which makes the combined work GPLv3 — see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). This app's own source is [MIT](LICENSE) as
+far as it can be; the root licence file still has to be updated to GPLv3 before a release.

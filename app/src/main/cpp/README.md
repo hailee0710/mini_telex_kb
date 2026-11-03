@@ -14,8 +14,8 @@ derived from OpenKey), copied verbatim from upstream commit
 | `platforms/mac.h` | key codes; upstream shares this table with the macOS build |
 
 Not built: `TouchModel.*` (fat-finger autocorrect and suggestions) — it is not wired to
-the keyboard yet. `tools/parity/harness.cpp` builds the same sources on the host, which
-is how the engine's behaviour is diffed against the old `TelexProcessor`.
+the keyboard yet. `tools/engine-test/jni-smoke.sh` builds these same sources on the host
+and runs `VikeyDriver.kt` against them on the JVM.
 
 ## Changes from upstream
 

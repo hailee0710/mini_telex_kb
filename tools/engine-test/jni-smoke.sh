@@ -33,4 +33,5 @@ java -cp "$KC:$STD:$COR:$ANN" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
     "$REPO/app/src/main/java/com/miniqwerty/kb/VikeyDriver.kt" "$HERE/jni-smoke.kt"
 
 echo "→ running"
-java -Djava.library.path="$BUILD/lib" -cp "$BUILD/out:$STD" Jni_smokeKt 2>&1 | grep -v "^WARNING" || true
+# pipefail: a failing case makes `java` exit non-zero, which fails the script.
+java -Djava.library.path="$BUILD/lib" -cp "$BUILD/out:$STD" Jni_smokeKt 2>&1 | grep -v "^WARNING"

@@ -22,8 +22,8 @@ MIT — that is a mismatch that must be resolved before any release:
    shipped tag/commit is public).
 3. Keep this notice and `app/src/main/cpp/engine/LICENSE` intact.
 
-The `tools/parity/` scripts read the engine's source and drive it for testing; they do not
-change the licensing analysis above.
+The `tools/engine-test/` scripts read the engine's source and drive it for testing; they
+do not change the licensing analysis above.
 
 ## Compiled-in data
 
