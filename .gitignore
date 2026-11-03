@@ -22,3 +22,6 @@ gradle/wrapper/gradle-wrapper.jar
 .DS_Store
 tools/__pycache__/
 /tools/data
+
+# NDK / CMake
+app/.cxx/

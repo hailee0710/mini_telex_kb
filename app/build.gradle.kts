@@ -6,6 +6,7 @@ plugins {
 android {
     namespace = "com.miniqwerty.kb"
     compileSdk = 34
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.miniqwerty.kb"
@@ -13,6 +14,24 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+
+        // No 32-bit ABIs: the engine typedefs Uint64 as `unsigned long`, which is 32-bit there.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+        externalNativeBuild {
+            cmake {
+                cppFlags += "-std=c++17"
+                arguments += "-DANDROID_STL=c++_static"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     signingConfigs {

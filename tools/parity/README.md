@@ -25,6 +25,7 @@ mode (no dictionary), so `mini(commit)` differences are dictionary-only.
 | `Dump.kt` | prints `raw \t live \t commit` from `TelexProcessor` |
 | `gen_corpus.py` | curated cases + a systematic onset × nucleus × coda × tone matrix |
 | `compare.py` | runs both, classifies and tabulates the differences |
+| `jni-smoke.sh` / `jni-smoke.kt` | end-to-end test of the JNI bridge: builds `libvikey.so` for the host from `app/src/main/cpp/` and drives `VikeyDriver.kt` on the JVM |
 | `.vikey/` | Vikey checkout (gitignored) |
 
 ## Flags that matter
@@ -57,6 +58,11 @@ tone + coda combinations that `TelexProcessor` happily accents (`acf` → Vikey 
 standard orthography (`quoác` vs `quóac`, `thuở` vs `thướ`).
 
 ## Caveats
+
+The JNI bridge has its own test, `./jni-smoke.sh`: it builds `libvikey.so` for the host
+from the vendored sources and runs `VikeyDriver.kt` on the JVM, so the Kotlin externals,
+the exported symbol names and the `Edit` packing are all exercised (needs a JDK, i.e.
+`JAVA_HOME` with `include/jni.h`).
 
 - The harness drives the engine directly; it does **not** exercise the `InputConnection`
   layer (composing text vs commit-only edits), which is where the real porting risk is.
