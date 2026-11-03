@@ -1,7 +1,7 @@
 # Builds libvikey.so from the vendored Vikey engine.
 #
 # The engine is plain C++17 with no Android dependencies (see engine/), so the same
-# sources compile on the host — tools/parity/harness.cpp does exactly that for testing.
+# sources compile on the host — tools/engine-test/jni-smoke.sh does exactly that for testing.
 cmake_minimum_required(VERSION 3.22.1)
 project(miniqwerty LANGUAGES CXX)
 
