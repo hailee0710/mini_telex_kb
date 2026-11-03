@@ -1,0 +1,9 @@
+.vikey/
+harness
+out/
+corpus_hand.txt
+corpus_matrix.txt
+build.env
+diff.csv
+diff_matrix.csv
+__pycache__/
