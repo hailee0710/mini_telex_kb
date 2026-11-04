@@ -547,11 +547,12 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     override fun onSuggestionItem(index: Int) {
         val text = clipboardHistory.getOrNull(index) ?: return
         val ic = currentInputConnection ?: return
-        // The strip shows only over an empty field — insert directly, no Telex
-        // involved (the paste is committed text).
+        // Insert directly, no Telex involved (the paste is committed text) —
+        // also when the field already holds text, since the strip now shows in
+        // both cases.
         resetEngine()
         insertDirect(ic, text)
-        // The pasted text now precedes the caret, so the strip hides itself.
+        // The pasted text now precedes the caret.
         updateSuggestionStrip()
     }
 
@@ -840,13 +841,14 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     }
 
     /**
-     * Show/hide the clipboard suggestion strip: visible only when the toggle
-     * is on, the clipboard holds text, and nothing precedes the caret (an
-     * empty field — the user is about to paste, Gboard-style).
+     * Show/hide the clipboard suggestion strip: visible whenever the toggle is
+     * on and the clipboard holds text, on every input state — the strip also
+     * carries the clipboard-layer button, so it must stay reachable while
+     * typing, not only over an empty field.
      */
     private fun updateSuggestionStrip() {
         if (!::keyboardView.isInitialized) return
-        val show = suggestionStripEnabled && lastContext.isNullOrEmpty() && clipboardHistory.isNotEmpty()
+        val show = suggestionStripEnabled && clipboardHistory.isNotEmpty()
         keyboardView.updateSuggestions(clipboardHistory, show)
     }
 

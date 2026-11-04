@@ -47,7 +47,7 @@ interface OnKeyActionListener {
 
 private enum class KeyType {
     CHARACTER, BACKSPACE, SHIFT, NUMERIC, ABC, SPACE, RETURN, SYMBOLS,
-    CLIPBOARD, CLIPBOARD_ITEM, CLIPBOARD_CLOSE
+    CLIPBOARD_ITEM, CLIPBOARD_CLOSE
 }
 
 /** Which keyboard layer is currently displayed. */
@@ -335,8 +335,8 @@ class MiniKeyboardView(context: Context) : View(context) {
         ),
         // Row 3 — control row with variable-width spans, "(.) keyed to the
         // right of space. 10 total units, aligned to row 1's 10-column grid.
-        // Clipboard is now a long-press on ⏎, so no dedicated button crowds
-        // the space bar.
+        // The clipboard button lives at the left of the strip above row 1, so
+        // no dedicated key crowds the space bar.
         listOf(
             KeyDef("⇧", null, widthUnits = 1.5f, keyType = KeyType.SHIFT),
             KeyDef("123", null, widthUnits = 1f, keyType = KeyType.NUMERIC),
@@ -440,16 +440,27 @@ class MiniKeyboardView(context: Context) : View(context) {
     /** Fixed close button, pinned to the top-right slot corner — no dedicated row. */
     private val clipboardCloseKey = KeyDef("✕", null, keyType = KeyType.CLIPBOARD_CLOSE)
 
+    /** Clipboard button, pinned to the left end of the suggestion strip — the
+     *  same row as the chips, which scroll behind it. Opens (and toggles) the
+     *  clipboard layer; its pixel bounds are set by [layoutStripButton]. */
+    private val stripButtonRect = RectF()
+
     // Clipboard list scroll state (drag vertically on an item row to scroll).
     private var clipboardScrollPx: Float = 0f
     private var clipboardScrollActive: Boolean = false
     private var clipboardScrollStartY: Float = 0f
     private var clipboardScrollStartPx: Float = 0f
 
-    // Height of one clipboard item slot. Computed per layout — NOT keyHeight,
-    // which is stale when the layer switches because the view size does not
-    // change (clipboard layer is the same total height as the letters layer).
+    // Height of one clipboard item slot, in the list region below the handle.
+    // Computed per layout (see layoutClipboardKeys) so it always matches the
+    // rows that are drawn and hit-tested.
     private var clipboardSlotH: Float = 0f
+
+    /** Top edge of the item list: just below the drag handle, with a small
+     *  inset so the first row never butts against it (its top edge would fall
+     *  in the handle's resize gesture instead of the row's tap). Set by
+     *  [layoutClipboardKeys]; 0 until the layer is first laid out. */
+    private var clipboardListTopPx: Float = 0f
 
     // ── Suggestion strip (clipboard paste chips above row 1) ────────────
     /** Whether the strip should show at all (driven by the IME: clipboard has
@@ -468,6 +479,9 @@ class MiniKeyboardView(context: Context) : View(context) {
     private var suggestionScrollActive = false
     private var suggestionScrollStartX = 0f
     private var suggestionScrollStartPx = 0f
+    /** The strip's clipboard button is pressed (a clean release opens the layer;
+     *  sliding off it turns into a chip scroll instead). */
+    private var stripButtonDown = false
 
     /** Pixel height of the strip when visible (else 0). */
     private val stripHeightPx: Float
@@ -497,9 +511,10 @@ class MiniKeyboardView(context: Context) : View(context) {
         // rows) and fits its 5 compact item slots inside it. Row 3 is 75% of
         // the standard row height, so the total is (rows - 1) + 0.75 rows.
         val rows = if (currentLayer == KeyboardLayer.CLIPBOARD) letterKeys.size else keys.size
-        // The suggestion strip adds its own row of height above the keys.
-        val stripH = if (suggestionVisible && currentLayer != KeyboardLayer.CLIPBOARD)
-            SUGGESTION_STRIP_HEIGHT_DP * density else 0f
+        // The suggestion strip adds its own row of height above the keys. The
+        // band is reserved on the clipboard layer too (where it draws nothing),
+        // so switching layers does not resize the window.
+        val stripH = if (suggestionVisible) SUGGESTION_STRIP_HEIGHT_DP * density else 0f
         val height = (((HANDLE_HEIGHT_DP + rowHeightDp * effectiveRows(rows)) * density) + stripH).toInt()
         setMeasuredDimension(width, height)
     }
@@ -509,12 +524,39 @@ class MiniKeyboardView(context: Context) : View(context) {
         viewWidth = w
         viewHeight = h
 
+        handleHeightPx = HANDLE_HEIGHT_DP * resources.displayMetrics.density
+        layoutStripButton()
+        applyMetrics()
+
+        layoutKeys()
+        clipboardScrollPx = clipboardScrollPx.coerceIn(0f, clipboardMaxScrollPx)
+        layoutSuggestionChips()
+        suggestionScrollPx = suggestionScrollPx.coerceIn(0f, suggestionMaxScrollPx)
+
+        // Cursor mode granularity: a quarter of a letter-column width per
+        // character — smaller step per char makes the cursor move faster
+        // for the same horizontal finger travel.
+        val aKey = letterKeys[1][0]
+        cursorPxPerChar = (aKey.right - aKey.left) * 0.25f
+    }
+
+    /**
+     * Recompute the metrics derived from the layer that is now showing
+     * ([keyHeight], the paint sizes, the corner radius). Called from
+     * [onSizeChanged] AND on every layer switch: entering and leaving the
+     * clipboard layer no longer changes the window size (its strip band is
+     * reserved), so a size change alone is not enough to keep these in sync —
+     * a stale clipboard slot height would otherwise squash the letters layer.
+     */
+    private fun applyMetrics() {
         val density = resources.displayMetrics.density
-        handleHeightPx = HANDLE_HEIGHT_DP * density
+        val clipboard = currentLayer == KeyboardLayer.CLIPBOARD
         // Clipboard layer: compact item slots in the main keyboard's height.
-        val rows = if (currentLayer == KeyboardLayer.CLIPBOARD) CLIPBOARD_SLOTS.toFloat()
-                   else effectiveRows(keys.size)
-        keyHeight = (h - handleHeightPx - stripHeightPx) / rows
+        // The list starts a little below the handle (see clipboardListTopPx),
+        // so that inset comes off the usable height here too.
+        val rows = if (clipboard) CLIPBOARD_SLOTS.toFloat() else effectiveRows(keys.size)
+        val inset = if (clipboard) CLIP_LIST_TOP_PAD_DP * density else stripHeightPx
+        keyHeight = (viewHeight - handleHeightPx - inset) / rows
 
         // Size text paints proportionally
         primaryTextPaint.textSize = keyHeight * 0.34f
@@ -530,21 +572,36 @@ class MiniKeyboardView(context: Context) : View(context) {
         cornerRadius = keyHeight * 0.10f
         // Clip rows are short — scale text relative to the row, not the key.
         clipboardItemTextPaint.textSize = keyHeight * 0.34f
-
-        layoutKeys()
-        clipboardScrollPx = clipboardScrollPx.coerceIn(0f, clipboardMaxScrollPx)
-        layoutSuggestionChips()
-        suggestionScrollPx = suggestionScrollPx.coerceIn(0f, suggestionMaxScrollPx)
-
-        // Cursor mode granularity: a quarter of a letter-column width per
-        // character — smaller step per char makes the cursor move faster
-        // for the same horizontal finger travel.
-        val aKey = letterKeys[1][0]
-        cursorPxPerChar = (aKey.right - aKey.left) * 0.25f
     }
 
     /** Total row-height units: every row is 1 unit, the last row is 75%. */
     private fun effectiveRows(rowCount: Int): Float = (rowCount - 1) + ROW3_HEIGHT_RATIO
+
+    /**
+     * Bounds of the strip's clipboard button: a square chip at the left end of
+     * the strip, exactly as tall as the chips beside it. Collapses to nothing
+     * (top below bottom) while the strip is hidden, so nothing can hit it.
+     */
+    private fun layoutStripButton() {
+        val density = resources.displayMetrics.density
+        val padY = SUGGESTION_CHIP_PAD_Y_DP * density
+        val marginX = KEY_MARGIN_DP * density
+        val size = (stripHeightPx - 2 * padY).coerceAtLeast(0f)
+        stripButtonRect.set(
+            marginX,
+            handleHeightPx + padY,
+            marginX + size,
+            handleHeightPx + padY + size
+        )
+    }
+
+    /** True when (x, y) falls on the strip's clipboard button. */
+    private fun isStripButtonAt(x: Float, y: Float): Boolean =
+        stripHeightPx > 0f && stripButtonRect.contains(x, y)
+
+    /** Where chip content starts: past the fixed button and its gap. */
+    private val stripContentStartX: Float
+        get() = stripButtonRect.right + SUGGESTION_CHIP_GAP_DP * resources.displayMetrics.density
 
     /** Assign pixel bounds to every key based on column spans. */
     private fun layoutKeys() {
@@ -600,9 +657,9 @@ class MiniKeyboardView(context: Context) : View(context) {
     }
 
     /**
-     * Clipboard layer layout: item rows stack full-width from the top,
-     * shifted up by [clipboardScrollPx]. The close button is a small FAB
-     * near the bottom-right corner, floating above the list.
+     * Clipboard layer layout: item rows stack full-width from just below the
+     * drag handle, shifted up by [clipboardScrollPx]. The close button is a
+     * small FAB near the bottom-right corner, floating above the list.
      */
     private fun layoutClipboardKeys() {
         val density = resources.displayMetrics.density
@@ -614,12 +671,16 @@ class MiniKeyboardView(context: Context) : View(context) {
         clipboardCloseKey.right = cx + r
         clipboardCloseKey.bottom = cy + r
 
-        // Slot height from the layer's own geometry, not keyHeight (which is
-        // stale until a size change — see clipboardSlotH declaration).
-        clipboardSlotH = (viewHeight - handleHeightPx) / CLIPBOARD_SLOTS
+        // The handle strip owns the top of the layer (drag to resize), and the
+        // list starts a small inset below it, so no row is drawn flush against
+        // — or partly inside — the resize gesture.
+        clipboardListTopPx = handleHeightPx + CLIP_LIST_TOP_PAD_DP * density
+        // Slot height from the layer's own geometry (not keyHeight, which also
+        // covers the paint sizing but is not the row pitch here).
+        clipboardSlotH = (viewHeight - clipboardListTopPx) / CLIPBOARD_SLOTS
         clipboardItemTextPaint.textSize = clipboardSlotH * 0.34f
 
-        var y = handleHeightPx - clipboardScrollPx
+        var y = clipboardListTopPx - clipboardScrollPx
         val colWidth = viewWidth / 2f
         for (row in clipboardRows) {
             for ((col, key) in row.withIndex()) {
@@ -644,8 +705,10 @@ class MiniKeyboardView(context: Context) : View(context) {
         if (layer != KeyboardLayer.LETTERS) shiftActive = false
         lastTapKey = null
         // Row count can differ between layers — remeasure so the IME window
-        // resizes and keyHeight is recomputed in onSizeChanged.
+        // resizes and keyHeight is recomputed in onSizeChanged. The metrics are
+        // refreshed here too, since equal-height layers never fire that.
         requestLayout()
+        applyMetrics()
         layoutKeys()
         invalidate()
     }
@@ -667,6 +730,7 @@ class MiniKeyboardView(context: Context) : View(context) {
         shiftActive = false
         lastTapKey = null
         requestLayout()
+        applyMetrics()
         layoutKeys()
         invalidate()
     }
@@ -678,6 +742,7 @@ class MiniKeyboardView(context: Context) : View(context) {
         rebuildClipboardRows()
         clipboardScrollPx = clipboardScrollPx.coerceIn(0f, clipboardMaxScrollPx)
         requestLayout()
+        applyMetrics()
         layoutKeys()
         invalidate()
     }
@@ -717,6 +782,9 @@ class MiniKeyboardView(context: Context) : View(context) {
         } else if (itemsChanged) {
             suggestionScrollPx = 0f
         }
+        // The strip's button is sized from the band height, so it has to be
+        // re-laid-out before the chips (which start after it).
+        layoutStripButton()
         layoutSuggestionChips()
         invalidate()
     }
@@ -741,7 +809,7 @@ class MiniKeyboardView(context: Context) : View(context) {
         suggestionTextPaint.textSize = stripH * SUGGESTION_TEXT_SCALE
         val xzone = SUGGESTION_DISMISS_DP * density
 
-        var x = marginX - suggestionScrollPx
+        var x = stripContentStartX - suggestionScrollPx
         for (item in suggestionItems) {
             val label = item.replace('\n', ' ').let {
                 if (it.length > SUGGESTION_CHIP_MAX_CHARS)
@@ -755,7 +823,7 @@ class MiniKeyboardView(context: Context) : View(context) {
         }
         // Right edge of the content (chip end plus trailing margin), used to
         // clamp the horizontal scroll. Scroll-independent — chips are laid out
-        // at (marginX - scrollPx), so add scrollPx back.
+        // at (stripContentStartX - scrollPx), so add scrollPx back.
         suggestionContentEndPx = (x - gap) + marginX + suggestionScrollPx
     }
 
@@ -803,11 +871,21 @@ class MiniKeyboardView(context: Context) : View(context) {
             drawSuggestionStrip(canvas)
         }
 
+        // Item rows scroll under the drag handle: clip them to the list region
+        // so a half-scrolled row never paints over the handle (or the FAB).
+        val clipboard = currentLayer == KeyboardLayer.CLIPBOARD
+        if (clipboard) {
+            canvas.save()
+            canvas.clipRect(
+                0f, clipboardListTopPx, viewWidth.toFloat(), viewHeight.toFloat()
+            )
+        }
         for (row in keys) {
             for (key in row) {
                 drawKey(canvas, key, key == downKey)
             }
         }
+        if (clipboard) canvas.restore()
 
         if (currentLayer == KeyboardLayer.CLIPBOARD) {
             // Close FAB floats above the list, and the empty state is a plain
@@ -834,6 +912,40 @@ class MiniKeyboardView(context: Context) : View(context) {
             pillH / 2f, pillH / 2f,
             handlePaint
         )
+    }
+
+    /**
+     * The strip's clipboard button: a chip-shaped key with the outlined
+     * clipboard glyph, pinned to the left end of the strip so it never scrolls
+     * away with the chips. Opens (or closes) the clipboard layer on tap.
+     */
+    private fun drawStripButton(canvas: Canvas) {
+        val rect = stripButtonRect
+        val pressed = stripButtonDown
+        canvas.drawRoundRect(
+            rect, cornerRadius, cornerRadius,
+            if (pressed) keyBgPressedPaint else keyBgModifierPaint
+        )
+
+        val density = resources.displayMetrics.density
+        val band = rect.height()
+        val stroke = 1.1f * density
+        val strokePaint = Paint(functionTextPaint).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = stroke
+        }
+        val cx = rect.centerX()
+        val cy = rect.centerY()
+        val hw = band * 0.20f  // half width
+        val hh = band * 0.24f  // half height
+        val radius = hw * 0.3f
+        // Board
+        canvas.drawRoundRect(RectF(cx - hw, cy - hh, cx + hw, cy + hh), radius, radius, strokePaint)
+        // Top tab, straddling the board's top edge
+        val tabW = hw * 0.45f
+        canvas.drawRect(RectF(cx - tabW, cy - hh - stroke, cx + tabW, cy - hh + stroke), strokePaint)
+        // Divider line under the tab
+        canvas.drawLine(cx - tabW, cy - hh * 0.4f, cx + tabW, cy - hh * 0.4f, strokePaint)
     }
 
     private fun drawKey(canvas: Canvas, key: KeyDef, pressed: Boolean) {
@@ -864,7 +976,6 @@ class MiniKeyboardView(context: Context) : View(context) {
         when (key.keyType) {
             KeyType.CHARACTER      -> drawCharacterKey(canvas, key, cx, cy)
             KeyType.CLIPBOARD_ITEM -> drawClipboardItemKey(canvas, key)
-            KeyType.CLIPBOARD      -> drawClipboardKey(canvas, cx, cy)
             else                   -> drawFunctionKey(canvas, key, cx, cy)
         }
     }
@@ -894,32 +1005,13 @@ class MiniKeyboardView(context: Context) : View(context) {
         canvas.drawText("ABC", cx, cy + r * 0.2f, labelPaint)
     }
 
-    /** Clipboard button glyph: small monochrome outlined clipboard icon,
-     *  matching the other function-key labels (⇧ ⏎) instead of the color emoji. */
-    private fun drawClipboardKey(canvas: Canvas, cx: Float, cy: Float) {
-        val stroke = resources.displayMetrics.density * 1.1f
-        val strokePaint = Paint(functionTextPaint).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = stroke
-        }
-        val hw = keyHeight * 0.11f  // half width
-        val hh = keyHeight * 0.14f  // half height
-        val radius = keyHeight * 0.03f
-        // Board
-        canvas.drawRoundRect(RectF(cx - hw, cy - hh, cx + hw, cy + hh), radius, radius, strokePaint)
-        // Top tab
-        val tabW = hw * 0.45f
-        canvas.drawRect(RectF(cx - tabW, cy - hh - stroke, cx + tabW, cy - hh + stroke), strokePaint)
-        // Divider line under the tab
-        canvas.drawLine(cx - tabW, cy - hh * 0.4f, cx + tabW, cy - hh * 0.4f, strokePaint)
-    }
-
     /** Clipboard history rows: single truncated line, left-aligned like a list,
      *  with a dismiss (✕) button on the right. */
     private fun drawClipboardItemKey(canvas: Canvas, key: KeyDef) {
         val density = resources.displayMetrics.density
         val pad = 12f * density
-        val baseline = key.top + clipboardSlotH * 0.65f
+        // Baseline from the row's own bounds (a scrolled row keeps its height).
+        val baseline = key.top + (key.bottom - key.top) * 0.65f
         canvas.drawText(key.primary, key.left + pad, baseline, clipboardItemTextPaint)
         // Dismiss button — own size, rows are shorter than normal keys now.
         val dismissPaint = Paint(clipboardItemTextPaint).apply {
@@ -929,10 +1021,20 @@ class MiniKeyboardView(context: Context) : View(context) {
         canvas.drawText("✕", key.right - zone / 2f, baseline, dismissPaint)
     }
 
-    /** Suggestion strip: one rounded chip per clipboard item, scrollable
-     *  horizontally. Each chip carries its label and a ✕ dismiss zone at its
-     *  right edge (mirrors the clipboard layer's per-item ✕). */
+    /** Suggestion strip: a fixed clipboard button at the left, then one
+     *  rounded chip per clipboard item, scrollable horizontally. Each chip
+     *  carries its label and a ✕ dismiss zone at its right edge (mirrors the
+     *  clipboard layer's per-item ✕). */
     private fun drawSuggestionStrip(canvas: Canvas) {
+        // The button is pinned: draw it first, then let the chips scroll
+        // underneath it (the clip keeps them from painting over it).
+        drawStripButton(canvas)
+        canvas.save()
+        canvas.clipRect(
+            stripButtonRect.right, handleHeightPx, viewWidth.toFloat(),
+            handleHeightPx + stripHeightPx
+        )
+
         suggestionTextPaint.textAlign = Paint.Align.CENTER
         val fm = suggestionTextPaint.fontMetrics
         val xzone = SUGGESTION_DISMISS_DP * resources.displayMetrics.density
@@ -961,6 +1063,7 @@ class MiniKeyboardView(context: Context) : View(context) {
             canvas.drawText("✕", rect.right - xzone / 2f, baseline, suggestionTextPaint)
             suggestionTextPaint.textSize = baseSize
         }
+        canvas.restore()
     }
 
     private fun drawCharacterKey(canvas: Canvas, key: KeyDef, cx: Float, cy: Float) {
@@ -1063,8 +1166,9 @@ class MiniKeyboardView(context: Context) : View(context) {
                 }
 
                 if (stripHeightPx > 0f && event.y < handleHeightPx + stripHeightPx) {
-                    // Tap/drag on the suggestion strip — chip gesture, not a key.
-                    beginSuggestionGesture(event.getPointerId(0), event.x)
+                    // Tap/drag on the suggestion strip — the clipboard button
+                    // or a chip, never a key.
+                    beginSuggestionGesture(event.getPointerId(0), event.x, event.y)
                     invalidate()
                     return true
                 }
@@ -1081,7 +1185,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                 // that lift is lost) and rebind tracking to the new pointer.
                 if (dragActive) return true
                 val idx = event.findPointerIndex(activePointerId)
-                if (suggestionDownIndex >= 0) {
+                if (isStripGestureActive()) {
                     commitSuggestionGesture(if (idx >= 0) event.getX(idx) else event.x)
                 } else {
                     commitGesture(if (idx >= 0) event.getX(idx) else event.x)
@@ -1090,7 +1194,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                 val nx = event.getX(newIdx)
                 val ny = event.getY(newIdx)
                 if (stripHeightPx > 0f && ny >= handleHeightPx && ny < handleHeightPx + stripHeightPx) {
-                    beginSuggestionGesture(event.getPointerId(newIdx), nx)
+                    beginSuggestionGesture(event.getPointerId(newIdx), nx, ny)
                 } else {
                     beginGesture(event.getPointerId(newIdx), nx, ny)
                 }
@@ -1134,7 +1238,22 @@ class MiniKeyboardView(context: Context) : View(context) {
                     return true
                 }
 
-                if (suggestionDownIndex >= 0) {
+                if (stripButtonDown) {
+                    // Sliding off the button turns the press into a chip
+                    // scroll (a clean release still opens the layer).
+                    val dx = ex - downX
+                    val dy = ey - downY
+                    if (abs(dx) > touchSlop || abs(dy) > touchSlop) {
+                        stripButtonDown = false
+                        suggestionScrollActive = true
+                        suggestionScrollStartX = ex
+                        suggestionScrollStartPx = suggestionScrollPx
+                    }
+                    invalidate()
+                    return true
+                }
+
+                if (suggestionDownIndex >= 0 || suggestionScrollActive) {
                     // Drag horizontally on the strip to scroll the chip row.
                     // A clean tap (no drift beyond the slop) still pastes on
                     // release; crossing the slop turns the gesture into a scroll.
@@ -1222,7 +1341,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                 }
 
                 val idx = event.findPointerIndex(activePointerId)
-                if (suggestionDownIndex >= 0) {
+                if (isStripGestureActive()) {
                     commitSuggestionGesture(if (idx >= 0) event.getX(idx) else event.x)
                 } else {
                     commitGesture(if (idx >= 0) event.getX(idx) else event.x)
@@ -1236,7 +1355,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                 // finger lifting was already finalized when it was displaced.
                 if (event.getPointerId(event.actionIndex) == activePointerId) {
                     val idx = event.findPointerIndex(activePointerId)
-                    if (suggestionDownIndex >= 0) {
+                    if (isStripGestureActive()) {
                         commitSuggestionGesture(if (idx >= 0) event.getX(idx) else event.x)
                     } else {
                         commitGesture(if (idx >= 0) event.getX(idx) else event.x)
@@ -1256,6 +1375,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                 clipboardScrollActive = false
                 suggestionScrollActive = false
                 suggestionDownIndex = -1
+                stripButtonDown = false
                 lastCursorChars = 0
                 tapMoved = false
                 originalDownKey = null
@@ -1295,6 +1415,11 @@ class MiniKeyboardView(context: Context) : View(context) {
                 // drag-to-scroll; a long-press pasting mid-scroll would
                 // be accidental.
             }
+            KeyType.RETURN -> {
+                // No long-press either: Enter commits on release, so holding
+                // the key does not fire a newline early. The clipboard layer
+                // has its own button at the top-left of the handle strip.
+            }
             null -> { /* no key under the touch — nothing to arm */ }
             else -> {
                 longPressRunnable = Runnable {
@@ -1307,12 +1432,6 @@ class MiniKeyboardView(context: Context) : View(context) {
                             // stays pressed and drags move the cursor.
                             spaceCursorMode = true
                             lastCursorChars = 0
-                        } else if (downKey?.keyType == KeyType.RETURN) {
-                            // Long-press return opens the clipboard layer —
-                            // the former clipboard button lived beside space
-                            // where it was too easy to hit by mistake.
-                            onKeyActionListener?.onClipboard()
-                            downKey = null
                         } else {
                             commitSecondary(downKey!!, replace = false, shifted = shiftActive)
                             downKey = null
@@ -1372,15 +1491,21 @@ class MiniKeyboardView(context: Context) : View(context) {
         downKey = null
     }
 
-    /** Start tracking a gesture on the suggestion strip at [x]. A press on a
-     *  chip fires the immediate haptic; the chip commits on a clean release
-     *  (see [commitSuggestionGesture]). */
-    private fun beginSuggestionGesture(pointerId: Int, x: Float) {
+    /** True while a strip gesture (clipboard button press or chip tap/scroll)
+     *  owns the touch. */
+    private fun isStripGestureActive(): Boolean =
+        stripButtonDown || suggestionDownIndex >= 0 || suggestionScrollActive
+
+    /** Start tracking a gesture on the suggestion strip at ([x], [y]). A press
+     *  on the clipboard button or on a chip fires the immediate haptic; either
+     *  commits on a clean release (see [commitSuggestionGesture]). */
+    private fun beginSuggestionGesture(pointerId: Int, x: Float, y: Float) {
         activePointerId = pointerId
-        suggestionDownIndex = chipIndexAt(x)
+        stripButtonDown = isStripButtonAt(x, y)
+        suggestionDownIndex = if (stripButtonDown) -1 else chipIndexAt(x)
         suggestionScrollActive = false
         downX = x
-        downY = 0f
+        downY = y
         // No key gesture is in flight — clear anything a prior gesture armed.
         longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
         backspaceRepeatRunnable?.let { repeatHandler.removeCallbacks(it) }
@@ -1390,18 +1515,27 @@ class MiniKeyboardView(context: Context) : View(context) {
         tapMoved = false
         originalDownKey = null
         downKey = null
-        if (suggestionDownIndex >= 0) haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+        if (stripButtonDown || suggestionDownIndex >= 0) haptic(HapticFeedbackConstants.KEYBOARD_TAP)
     }
 
     /** Finalize a suggestion-strip gesture. A clean tap (no drag beyond the
-     *  slop, which would have turned into a scroll) pastes the pressed chip —
-     *  unless the release lands on its ✕ zone, which dismisses the entry
-     *  (mirrors the clipboard layer, and the index matches its history order). */
+     *  slop, which would have turned into a scroll) opens the clipboard layer
+     *  on the button, or pastes the pressed chip — unless the release lands on
+     *  its ✕ zone, which dismisses the entry (mirrors the clipboard layer, and
+     *  the index matches its history order). */
     private fun commitSuggestionGesture(releaseX: Float) {
+        val onButton = stripButtonDown
         val index = suggestionDownIndex
         val scrolled = suggestionScrollActive
+        stripButtonDown = false
         suggestionDownIndex = -1
         suggestionScrollActive = false
+        if (onButton) {
+            // Still on the button? A slide that left it already cleared the
+            // flag in ACTION_MOVE (it becomes a scroll instead).
+            if (!scrolled) onKeyActionListener?.onClipboard()
+            return
+        }
         if (scrolled || index < 0 || index >= chipRects.size) return
         val listener = onKeyActionListener ?: return
         val xzone = SUGGESTION_DISMISS_DP * resources.displayMetrics.density
@@ -1486,16 +1620,9 @@ class MiniKeyboardView(context: Context) : View(context) {
      * toward the key the finger most likely meant.
      */
     private fun findKeyAt(x: Float, y: Float): KeyDef? {
-        // The clipboard close FAB floats above the list — hit it first.
-        if (currentLayer == KeyboardLayer.CLIPBOARD) {
-            val ck = clipboardCloseKey
-            val r = (ck.right - ck.left) / 2f
-            val cx = (ck.left + ck.right) / 2f
-            val cy = (ck.top + ck.bottom) / 2f
-            val dx = x - cx
-            val dy = y - cy
-            if (dx * dx + dy * dy <= r * r) return ck
-        }
+        // The clipboard layer is a list, not a key grid — it has its own,
+        // rectangle-based lookup.
+        if (currentLayer == KeyboardLayer.CLIPBOARD) return findClipboardItemAt(x, y)
         // Outside the key area: the drag-handle strip above, or below the window.
         if (y < handleHeightPx || y >= viewHeight) return null
 
@@ -1527,6 +1654,39 @@ class MiniKeyboardView(context: Context) : View(context) {
             }
         }
         return best
+    }
+
+    /**
+     * Clipboard-layer hit test. The rows are not keyboard keys: one is half the
+     * screen wide and a fifth of the keyboard tall, so the circular sweet spot
+     * used for letters (radius = half the bounding-box diagonal, ~ a third of
+     * the screen width) would swallow taps far away from the drawn row — an
+     * empty strip below the list still pasted the last item. Match the drawn
+     * rectangles instead, clipped to the visible list region, so a tap only
+     * does something when it lands on a row that is actually on screen.
+     */
+    private fun findClipboardItemAt(x: Float, y: Float): KeyDef? {
+        // The close FAB floats above the list — hit it first.
+        val ck = clipboardCloseKey
+        val r = (ck.right - ck.left) / 2f
+        val cx = (ck.left + ck.right) / 2f
+        val cy = (ck.top + ck.bottom) / 2f
+        val dx = x - cx
+        val dy = y - cy
+        if (dx * dx + dy * dy <= r * r) return ck
+        // The drag-handle strip above and anything past the window belong to
+        // no row.
+        if (y < clipboardListTopPx || y >= viewHeight) return null
+        for (row in clipboardRows) {
+            for (key in row) {
+                // Rows scrolled out of the list never hit.
+                if (key.bottom <= clipboardListTopPx || key.top >= viewHeight) continue
+                if (x >= key.left && x < key.right && y >= key.top && y < key.bottom) {
+                    return key
+                }
+            }
+        }
+        return null
     }
 
     // ── Commit helpers ────────────────────────────────────────────────────
@@ -1568,7 +1728,6 @@ class MiniKeyboardView(context: Context) : View(context) {
             KeyType.SYMBOLS   -> setLayer(KeyboardLayer.SYMBOLS)
             KeyType.SPACE     -> listener.onSpace()
             KeyType.RETURN    -> listener.onReturn()
-            KeyType.CLIPBOARD -> listener.onClipboard()
             KeyType.CLIPBOARD_ITEM -> listener.onClipboardItem(key.index)
             KeyType.CLIPBOARD_CLOSE -> setLayer(KeyboardLayer.LETTERS)
         }
@@ -1698,6 +1857,11 @@ class MiniKeyboardView(context: Context) : View(context) {
          *  compact rows squeezed into the main keyboard's height; the full
          *  history (30) scrolls through them. */
         private const val CLIPBOARD_SLOTS = 5
+
+        /** Gap between the drag handle and the first clipboard row (dp) — keeps
+         *  the top row out of the handle's resize gesture and off the very top
+         *  edge of the layer. */
+        private const val CLIP_LIST_TOP_PAD_DP = 6f
 
         /** Width of the per-item dismiss (✕) button zone. */
         private const val CLIP_DISMISS_ZONE_DP = 40f

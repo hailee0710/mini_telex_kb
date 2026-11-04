@@ -66,7 +66,8 @@ shape check or auto switch, so `fix` becomes `fĩ`.
 - **Row 1:** `X(Q) W(?) E R T H(Y) U I(P) O ,(.)` — comma top, dot below.
 - **Row 2:** `A S(Z) D F(C) G(V) N(B) J(K) M(L)` + backspace.
 - **Row 3:** shift, `123`, space, return.
-- **Numeric layer:** digits, `@ ! % : ) - ? = / ]` with double-tap secondaries `~ # $ & ( _ + ; ' [`; plus `.` and `📋` (clipboard).
+- **Numeric layer:** digits, `@ ! % : ) - ? = / ]` with double-tap secondaries `~ # $ & ( _ + ; ' [`; plus the `.` key (`,` on double-tap).
+- **Clipboard:** the strip above row 1 opens with a clipboard button at its left end — tap it to open or close the clipboard layer. The strip shows whenever the clipboard history has an item.
 
 Quick double-tap on a key replaces the last character with the key's secondary. Long-press (350 ms) or a deliberate swipe-down commits the secondary. Double-tap Shift for caps lock (⇪). Backspace repeats while held. Fast typing is safe: overlapping taps (the next finger landing before the previous lifts) still register both keys, and a thumb roll on a tap won't fire a swipe or a double-tap.
 

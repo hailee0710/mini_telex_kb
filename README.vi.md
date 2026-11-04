@@ -64,7 +64,8 @@ hình dạng và không tự chuyển ngôn ngữ, nên `fix` thành `fĩ`.
 - **Hàng 1:** `X(Q) W(?) E R T H(Y) U I(P) O ,(.)` — phẩy trên, chấm dưới.
 - **Hàng 2:** `A S(Z) D F(C) G(V) N(B) J(K) M(L)` + phím xóa.
 - **Hàng 3:** shift, `123`, cách, enter.
-- **Hàng số:** chữ số, `@ ! % : ) - ? = / ]` kèm ký tự phụ `~ # $ & ( _ + ; ' [`; cùng `.` và `📋` (clipboard).
+- **Hàng số:** chữ số, `@ ! % : ) - ? = / ]` kèm ký tự phụ `~ # $ & ( _ + ; ' [`; cùng phím `.` (`,` khi chạm đúp).
+- **Clipboard:** dải trên hàng 1 có nút clipboard ở đầu trái — chạm để mở/đóng layer clipboard. Dải hiện mỗi khi lịch sử clipboard có nội dung.
 
 Chạm nhanh hai lần vào phím sẽ thay ký tự cuối bằng ký tự phụ của phím đó. Giữ lâu (350 ms) hoặc vuốt xuống dứt khoát để gõ ký tự phụ. Chạm đúp Shift để bật caps lock (⇪). Giữ phím xóa để xóa liên tục. Gõ nhanh an toàn: hai phím chạm chồng nhau (ngón sau chạm trước khi ngón trước nhấc) vẫn gõ được cả hai, và ngón cái trượt nhẹ khi chạm sẽ không kích hoạt vuốt hay chạm đúp.
 
