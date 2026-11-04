@@ -27,6 +27,8 @@ interface OnKeyActionListener {
     fun onBackspace()
     fun onShift()
     fun onNumeric()
+    /** Long-press on the 123 key: leave the field and open the app's settings. */
+    fun onOpenSettings()
     fun onSpace()
     fun onReturn()
     /** Move the cursor by [delta] characters (negative = left). Space-bar cursor mode. */
@@ -1475,6 +1477,11 @@ class MiniKeyboardView(context: Context) : View(context) {
                             // stays pressed and drags move the cursor.
                             spaceCursorMode = true
                             lastCursorChars = 0
+                        } else if (downKey?.keyType == KeyType.NUMERIC) {
+                            // Long-press 123 opens the app's settings instead
+                            // of switching layers — a short tap still does.
+                            onKeyActionListener?.onOpenSettings()
+                            downKey = null
                         } else {
                             commitSecondary(downKey!!, replace = false, shifted = shiftActive)
                             downKey = null

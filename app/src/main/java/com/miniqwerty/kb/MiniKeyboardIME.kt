@@ -3,6 +3,7 @@ package com.miniqwerty.kb
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.inputmethodservice.InputMethodService
 import android.os.Build
@@ -431,6 +432,16 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
 
     override fun onNumeric() {
         // Layer switching is handled by MiniKeyboardView; nothing to do here.
+    }
+
+    override fun onOpenSettings() {
+        // Long-press on 123: bring the settings screen up over the field. The
+        // IME window hides with the app that owned it, and the settings screen
+        // is the launcher entry point, so a NEW_TASK launch is what the
+        // activity expects from a non-activity context.
+        val intent = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
     }
 
     override fun onSpace() {
