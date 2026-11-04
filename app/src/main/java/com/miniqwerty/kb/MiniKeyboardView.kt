@@ -185,6 +185,11 @@ class MiniKeyboardView(context: Context) : View(context) {
     private val keyBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val keyBgModifierPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val keyBgPressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    /** Key outline, stroked on the fill's edge. Only the light palette gives it
+     *  a visible color: on e-ink the fill steps alone are too close in grey to
+     *  separate neighbouring keys, while a 1 dp line comes out crisp. The dark
+     *  palettes keep it transparent (a no-op stroke) and stay flat. */
+    private val keyBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val primaryTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER
     }
@@ -251,6 +256,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                 keyBgPaint.color = 0xFF1B1B1D.toInt()
                 keyBgModifierPaint.color = 0xFF111113.toInt()
                 keyBgPressedPaint.color = 0xFF2A2A2C.toInt()
+                keyBorderPaint.color = Color.TRANSPARENT
                 primaryTextPaint.color = 0xFFFFFFFF.toInt()
                 toneTextPaint.color = 0xFFFF8A50.toInt() // orange accent
                 capsLockTextPaint.color = 0xFFFF8A50.toInt() // orange accent
@@ -266,6 +272,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                 keyBgPaint.color = 0xFF484C4F.toInt()
                 keyBgModifierPaint.color = 0xFF373C40.toInt()
                 keyBgPressedPaint.color = 0xFF5A5F64.toInt()
+                keyBorderPaint.color = Color.TRANSPARENT
                 primaryTextPaint.color = 0xFFFFFFFF.toInt()
                 toneTextPaint.color = 0xFFFF8A50.toInt() // orange accent
                 capsLockTextPaint.color = 0xFFFF8A50.toInt() // orange accent
@@ -277,19 +284,25 @@ class MiniKeyboardView(context: Context) : View(context) {
                 handlePaint.color = 0x59FFFFFF.toInt()
             }
             else -> { // PALETTE_LIGHT
+                // E-ink first: greys quantize hard on an e-paper panel, so the
+                // separation between background, modifier and character keys is
+                // wider than a phone needs, every key carries a visible
+                // outline, and the label greys are dark enough to survive the
+                // panel's anti-aliasing (see PALETTE_LIGHT notes in CLAUDE.md).
                 bgPaint.color = LIGHT_BG_COLOR
-                keyBgPaint.color = 0xFFEEEEEE.toInt()
-                keyBgModifierPaint.color = 0xFFDDE0E4.toInt()
-                keyBgPressedPaint.color = 0xFFCFD3D7.toInt()
-                primaryTextPaint.color = 0xFF2A2A2A.toInt()
-                toneTextPaint.color = 0xFFE65100.toInt() // orange accent
-                capsLockTextPaint.color = 0xFFE65100.toInt() // orange accent
-                secondaryTextPaint.color = 0xFF8A8A8A.toInt()
-                functionTextPaint.color = 0xFF4A4A4A.toInt()
-                functionBoldTextPaint.color = 0xFF4A4A4A.toInt()
-                clipboardItemTextPaint.color = 0xFF2A2A2A.toInt()
-                suggestionTextPaint.color = 0xFF2A2A2A.toInt()
-                handlePaint.color = 0x66808080.toInt()
+                keyBgPaint.color = 0xFFF7F8F9.toInt()
+                keyBgModifierPaint.color = 0xFFE0E4E8.toInt()
+                keyBgPressedPaint.color = 0xFF9CA4AC.toInt()
+                keyBorderPaint.color = 0xFF6E767E.toInt()
+                primaryTextPaint.color = 0xFF1B1B1B.toInt()
+                toneTextPaint.color = 0xFFC04300.toInt() // orange accent
+                capsLockTextPaint.color = 0xFFC04300.toInt() // orange accent
+                secondaryTextPaint.color = 0xFF6A6F75.toInt()
+                functionTextPaint.color = 0xFF303338.toInt()
+                functionBoldTextPaint.color = 0xFF303338.toInt()
+                clipboardItemTextPaint.color = 0xFF1B1B1B.toInt()
+                suggestionTextPaint.color = 0xFF1B1B1B.toInt()
+                handlePaint.color = 0xAA8A9096.toInt()
             }
         }
     }
@@ -570,6 +583,9 @@ class MiniKeyboardView(context: Context) : View(context) {
         // Large rounded corners, scaled to the key height (the reference look:
         // flat keys with a generous radius).
         cornerRadius = keyHeight * 0.10f
+        // Hairline outline; scaled with density, not key height — e-ink panels
+        // render a 1 dp line at native resolution, thicker reads as a smudge.
+        keyBorderPaint.strokeWidth = KEY_BORDER_WIDTH_DP * density
         // Clip rows are short — scale text relative to the row, not the key.
         clipboardItemTextPaint.textSize = keyHeight * 0.34f
     }
@@ -926,6 +942,7 @@ class MiniKeyboardView(context: Context) : View(context) {
             rect, cornerRadius, cornerRadius,
             if (pressed) keyBgPressedPaint else keyBgModifierPaint
         )
+        canvas.drawRoundRect(rect, cornerRadius, cornerRadius, keyBorderPaint)
 
         val density = resources.displayMetrics.density
         val band = rect.height()
@@ -960,7 +977,8 @@ class MiniKeyboardView(context: Context) : View(context) {
         val rect = RectF(l, t, r, b)
 
         // Modifier keys (shift, backspace, layer/return) get a darker fill;
-        // characters and the space bar use the standard key fill. No border.
+        // characters and the space bar use the standard key fill. The outline
+        // is transparent except in the light palette.
         val bg = when {
             pressed -> keyBgPressedPaint
             key.keyType == KeyType.SPACE ||
@@ -969,6 +987,7 @@ class MiniKeyboardView(context: Context) : View(context) {
             else -> keyBgModifierPaint
         }
         canvas.drawRoundRect(rect, cornerRadius, cornerRadius, bg)
+        canvas.drawRoundRect(rect, cornerRadius, cornerRadius, keyBorderPaint)
 
         val cx = key.left + (key.right - key.left) / 2f
         val cy = key.top + (key.bottom - key.top) / 2f
@@ -1047,6 +1066,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                 rect, cornerRadius, cornerRadius,
                 if (pressed) keyBgPressedPaint else keyBgModifierPaint
             )
+            canvas.drawRoundRect(rect, cornerRadius, cornerRadius, keyBorderPaint)
             // Vertically center the label inside the chip.
             val baseline = rect.top + (rect.height() - (fm.descent - fm.ascent)) / 2f - fm.ascent
             // Label centered over the text region (left of the ✕ zone).
@@ -1769,11 +1789,12 @@ class MiniKeyboardView(context: Context) : View(context) {
 
     companion object {
         /** Keyboard background fills — shared with the IME so the system
-         *  navigation bar can be tinted to match (MiniKeyboardIME). */
-        /** Keyboard background fills — shared with the IME so the system
-         *  navigation bar can be tinted to match (MiniKeyboardIME). */
+         *  navigation bar can be tinted to match (MiniKeyboardIME).
+         *  LIGHT_BG_COLOR is deliberately a mid grey: an e-ink panel flattens
+         *  near-white steps into the same dither, so the character keys
+         *  (0xFFF7F8F9) need a real gap behind them to read as separate keys. */
         const val DARK_BG_COLOR = 0xFF292E32.toInt()
-        const val LIGHT_BG_COLOR = 0xFFD5D9DE.toInt()
+        const val LIGHT_BG_COLOR = 0xFFC6CBD1.toInt()
         /** Pure black for OLED screens — pixels stay off when idle. */
         const val OLED_BG_COLOR = 0xFF000000.toInt()
 
@@ -1829,6 +1850,8 @@ class MiniKeyboardView(context: Context) : View(context) {
          *  vertically than horizontally, mirroring the reference spacing. */
         private const val KEY_PAD_X_DP = 1.5f
         private const val KEY_PAD_Y_DP = 2.5f
+        /** Outline width in dp for the light palette's key border. */
+        private const val KEY_BORDER_WIDTH_DP = 1f
 
         /** Extra inset for corner labels so glyphs clear the key edges (dp). */
         private const val KEY_CORNER_PAD_DP = 4f
