@@ -91,6 +91,10 @@ gradle wrapper --gradle-version 8.5   # nếu thiếu ./gradlew (không commit)
 JAVA_HOME=/duong/dan/jdk tools/engine-test/jni-smoke.sh
 ```
 
+Máy chưa có JDK 17? `tools/build-docker.sh [tác vụ gradle…]` biên dịch trong container —
+JDK 17 và Gradle 8.5 nằm trong `tools/docker/Dockerfile`, còn repo, cache Gradle và Android SDK
+được mount nguyên đường dẫn nên không phải sửa gì thêm.
+
 Kiểm thử engine cần JDK có `include/jni.h` (không phải JRE) và `g++`; chạy
 `./gradlew assembleDebug` một lần trước để jar Kotlin có trong cache Gradle.
 

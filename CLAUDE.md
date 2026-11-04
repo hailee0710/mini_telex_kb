@@ -25,6 +25,14 @@ gradle wrapper --gradle-version 8.5   # one-time, if ./gradlew missing
 
 Output APK: `app/build/outputs/apk/debug/`.
 
+No JDK on the host? `tools/build-docker.sh` builds in a container instead — JDK 17 and Gradle 8.5 come from `tools/docker/Dockerfile`, and the repo, `~/.gradle` cache and Android SDK are bind-mounted at their own paths (so `local.properties` and the NDK/CMake paths keep working, and `app/.cxx` is shared with host builds). It runs as your UID/GID and takes the same Gradle arguments:
+
+```bash
+tools/build-docker.sh                  # assembleDebug
+tools/build-docker.sh assembleRelease
+tools/build-docker.sh lint
+```
+
 The only automated tests are the engine's, which build `libvikey.so` for the host from the vendored sources and drive `VikeyDriver.kt` on the JVM:
 
 ```bash

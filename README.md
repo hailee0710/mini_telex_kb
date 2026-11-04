@@ -93,6 +93,10 @@ gradle wrapper --gradle-version 8.5   # if ./gradlew missing (not committed)
 JAVA_HOME=/path/to/jdk tools/engine-test/jni-smoke.sh
 ```
 
+No JDK 17 installed? `tools/build-docker.sh [gradle task…]` runs the same build in a
+container — JDK 17 and Gradle 8.5 live in `tools/docker/Dockerfile`, while your repo, Gradle
+cache and Android SDK are bind-mounted, so nothing else has to change.
+
 The engine test needs a JDK with `include/jni.h` (not just a JRE) and `g++`; run
 `./gradlew assembleDebug` once first so its Kotlin jars are in the Gradle cache.
 
