@@ -43,5 +43,5 @@ Only `vikey_jni.cpp` (in the parent directory) differs:
 
 ## Licence
 
-GPLv3 (see `engine/LICENSE`). Combined with this app it makes the whole work GPLv3 —
-the repository's `LICENSE` still says MIT and must change before distribution.
+GPLv3 (see `engine/LICENSE`), which makes the whole app GPLv3 — the repository's root
+`LICENSE` carries the same licence.

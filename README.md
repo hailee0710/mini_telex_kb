@@ -107,6 +107,9 @@ No `uses-permission` entries in the manifest. No internet permission, no telemet
 
 The Vietnamese engine in `app/src/main/cpp/` is [Vikey](https://github.com/tonyminibot/Vikey)'s,
 itself derived from [OpenKey](https://github.com/tuyenvm/OpenKey), vendored verbatim at
-upstream commit `783bf95`. It is **GPLv3**, which makes the combined work GPLv3 — see
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). This app's own source is [MIT](LICENSE) as
-far as it can be; the root licence file still has to be updated to GPLv3 before a release.
+upstream commit `783bf95`.
+
+This app as a whole is **GPLv3** — see [LICENSE](LICENSE) and
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). You may use, study, change and
+redistribute it under the same licence, and any distributed build must come with its
+complete corresponding source.

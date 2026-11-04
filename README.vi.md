@@ -105,6 +105,8 @@ Manifest không khai báo `uses-permission` nào. Không quyền internet, khôn
 
 Engine tiếng Việt trong `app/src/main/cpp/` là của [Vikey](https://github.com/tonyminibot/Vikey),
 dựa trên [OpenKey](https://github.com/tuyenvm/OpenKey), được đưa nguyên bản từ commit
-`783bf95`. Engine theo **GPLv3**, nên tác phẩm kết hợp cũng là GPLv3 — xem
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Phần mã riêng của ứng dụng là [MIT](LICENSE)
-theo mức có thể; tệp giấy phép gốc vẫn phải đổi sang GPLv3 trước khi phát hành.
+`783bf95`.
+
+Toàn bộ ứng dụng theo **GPLv3** — xem [LICENSE](LICENSE) và
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Bạn được dùng, nghiên cứu, sửa và phát
+hành lại theo cùng giấy phép; bản phát hành phải kèm mã nguồn tương ứng đầy đủ.

@@ -8,7 +8,7 @@ Android custom keyboard (IME) with a compact 3-row QWERTY layout and a built-in 
 
 Toolchain pins: AGP 8.2.2, Kotlin 1.9.22, Gradle 8.5, NDK 27.2.12479018, CMake 3.22.1. Only external dependency is `androidx.core:core-ktx`.
 
-The engine is **GPLv3**, so the combined work is too — see `THIRD-PARTY-NOTICES.md`. The root `LICENSE` still says MIT and must change before any release.
+The whole app is **GPLv3** (`LICENSE`) because it links the GPLv3 engine — see `THIRD-PARTY-NOTICES.md`. Any distributed build must ship the corresponding source.
 
 ## Build
 
