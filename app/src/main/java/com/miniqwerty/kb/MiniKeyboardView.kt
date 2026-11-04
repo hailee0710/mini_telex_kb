@@ -290,10 +290,10 @@ class MiniKeyboardView(context: Context) : View(context) {
                 // outline, and the label greys are dark enough to survive the
                 // panel's anti-aliasing (see PALETTE_LIGHT notes in CLAUDE.md).
                 bgPaint.color = LIGHT_BG_COLOR
-                keyBgPaint.color = 0xFFF7F8F9.toInt()
-                keyBgModifierPaint.color = 0xFFE0E4E8.toInt()
-                keyBgPressedPaint.color = 0xFF9CA4AC.toInt()
-                keyBorderPaint.color = 0xFF6E767E.toInt()
+                keyBgPaint.color = LIGHT_BG_COLOR
+                keyBgModifierPaint.color = 0xFFE8EBEE.toInt()
+                keyBgPressedPaint.color = 0xFFBFC5CB.toInt()
+                keyBorderPaint.color = 0xFF6F777F.toInt()
                 primaryTextPaint.color = 0xFF1B1B1B.toInt()
                 toneTextPaint.color = 0xFFC04300.toInt() // orange accent
                 capsLockTextPaint.color = 0xFFC04300.toInt() // orange accent
@@ -1790,11 +1790,12 @@ class MiniKeyboardView(context: Context) : View(context) {
     companion object {
         /** Keyboard background fills — shared with the IME so the system
          *  navigation bar can be tinted to match (MiniKeyboardIME).
-         *  LIGHT_BG_COLOR is deliberately a mid grey: an e-ink panel flattens
-         *  near-white steps into the same dither, so the character keys
-         *  (0xFFF7F8F9) need a real gap behind them to read as separate keys. */
+         *  The light palette is a white page: background and character keys are
+         *  both white and the key outline does the separating, because e-ink
+         *  renders a white field crisply (and refreshes fastest) while a pair of
+         *  near-whites would dither into one tone. */
         const val DARK_BG_COLOR = 0xFF292E32.toInt()
-        const val LIGHT_BG_COLOR = 0xFFC6CBD1.toInt()
+        const val LIGHT_BG_COLOR = 0xFFFFFFFF.toInt()
         /** Pure black for OLED screens — pixels stay off when idle. */
         const val OLED_BG_COLOR = 0xFF000000.toInt()
 
