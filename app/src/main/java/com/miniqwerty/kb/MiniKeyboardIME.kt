@@ -768,11 +768,31 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             insert = insert.substring(same)
         }
         ic.beginBatchEdit()
-        if (deletes > 0) ic.deleteSurroundingText(deletes, 0)
-        if (insert.isNotEmpty()) ic.commitText(insert, 1)
+        // A raw-key editor (a terminal emulator: TYPE_NULL, no text buffer)
+        // handles deleteSurroundingText by firing KEYCODE_DEL key events,
+        // which the app dispatches on its UI thread — so they land after the
+        // text we commit from this one. "tiếng" then deletes its own tail and
+        // the tone mark vanishes at random. Its commitText path writes to the
+        // terminal synchronously, so send the deletions *inside* that same
+        // commit as DEL characters: one ordered write, nothing to race.
+        val foldDeletes = deletes > 0 && isRawKeyEditor
+        if (deletes > 0 && !foldDeletes) ic.deleteSurroundingText(deletes, 0)
+        val commit = if (foldDeletes) DEL_CHAR.repeat(deletes) + insert else insert
+        if (commit.isNotEmpty()) ic.commitText(commit, 1)
         ic.endBatchEdit()
         afterEdit(deletes, insert)
     }
+
+    /** True for an editor that takes raw key input instead of holding a text
+     *  buffer of its own — a terminal emulator. It declares no input class
+     *  ([InputType.TYPE_NULL]) and reports no caret position, because the
+     *  cursor lives in the pty, not in the view. */
+    private val isRawKeyEditor: Boolean
+        get() {
+            val info = editorInfo ?: return false
+            return info.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_NULL &&
+                info.initialSelStart < 0
+        }
 
     /** Insert text that did not come from the engine — a paste, or a keystroke
      *  in a password field. */
@@ -940,6 +960,10 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
 
         /** How many of our own caret positions to remember for onUpdateSelection. */
         private const val RECENT_POSITIONS = 12
+
+        /** ASCII DEL, what a terminal erases with. Committed in place of a
+         *  deleteSurroundingText call when the editor is a raw-key terminal. */
+        private const val DEL_CHAR = "\u007F"
 
         /**
          * The one engine instance for the process. Vikey keeps the current
