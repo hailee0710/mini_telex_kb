@@ -51,14 +51,42 @@ private class Sim {
     }
     val field = Field()
     val wordKeys = StringBuilder()
+    var wordLength = 0
+    var wordKeysExact = true
+    var undoLastEdit: Edit? = null
 
     fun type(s: String) {
         for (c in s) typed(c)
     }
 
     fun typed(char: Char) {
-        field.apply(driver.typeCharacter(char.toString(), 0.0))
-        if (char.isLetter()) wordKeys.append(char) else wordKeys.setLength(0)
+        val e = driver.typeCharacter(char.toString(), 0.0)
+        applyEdit(e)
+        if (char.isLetter()) {
+            wordKeys.append(char)
+            accountWordEdit(e)
+        } else {
+            clearWord()
+        }
+    }
+
+    /** MiniKeyboardIME.applyEdit: apply an engine edit and remember its inverse. */
+    private fun applyEdit(e: Edit) {
+        val before = field.lastContext
+        undoLastEdit = if (e.deleteCount == 0) {
+            Edit(e.text.length, "", false)
+        } else if (before != null && before.length >= e.deleteCount) {
+            Edit(e.text.length, before.takeLast(e.deleteCount), false)
+        } else {
+            null
+        }
+        field.apply(e)
+    }
+
+    /** MiniKeyboardIME.insertDirect: commit text without the engine. */
+    private fun insertDirect(text: String) {
+        field.insertDirect(text)
+        undoLastEdit = Edit(text.length, "", false)
     }
 
     /** MiniKeyboardIME.onCharacter, including auto-capitalize. */
@@ -68,47 +96,90 @@ private class Sim {
     }
 
     fun backspace() {
-        field.apply(driver.backspace(0.0))
+        val e = driver.backspace(0.0)
+        applyEdit(e)
+        accountWordEdit(e)
         wordKeys.setLength(0)
+        wordKeysExact = false
     }
 
     /** MiniKeyboardIME.onReplaceCharacter: replay the word with the secondary. */
     fun replaceWith(char: Char) {
-        val displayed = letterRunLength(field.lastContext ?: "")
-        if (wordKeys.isEmpty() || displayed == 0) {
-            field.apply(driver.backspace(0.0))
-            character(char)
+        if (!wordKeysExact || wordKeys.isEmpty() || wordLength == 0) {
+            replaceLastTap(char)
             return
         }
         wordKeys.setLength(wordKeys.length - 1)
         wordKeys.append(char)
-        driver.resetContext()
+        replayWord(wordLength)
+    }
+
+    /** MiniKeyboardIME.replaceLastTap: reverse the first tap, commit the secondary. */
+    private fun replaceLastTap(char: Char) {
+        val undo = undoLastEdit
+        if (undo == null) {
+            applyEdit(driver.backspace(0.0))
+            character(char)
+            return
+        }
+        applyEdit(undo)
+        resetEngine()
+        insertDirect(char.toString())
+    }
+
+    /** MiniKeyboardIME.replayWord — re-run the engine over the recorded keys. */
+    private fun replayWord(displayed: Int) {
+        // resetEngine() empties wordKeys, so the keys must be snapshotted first.
+        val keys = wordKeys.toString()
+        resetEngine()
         var shadow = ""
-        for (c in wordKeys) {
+        for (c in keys) {
             val e = driver.typeCharacter(c.toString(), 0.0)
             shadow = shadow.dropLast(minOf(e.deleteCount, shadow.length)) + e.text
         }
         field.apply(Edit(displayed, shadow, false))
+        wordKeys.append(keys)
+        wordKeysExact = true
+        wordLength = shadow.length
     }
 
-    fun letterRunLength(s: String): Int {
-        var i = s.length
-        while (i > 0 && s[i - 1].isLetter()) i--
-        return s.length - i
+    /** MiniKeyboardIME.accountWordEdit — keep the word's on-screen length in step. */
+    private fun accountWordEdit(e: Edit) {
+        if (e.deleteCount > wordLength) {
+            wordKeys.setLength(0)
+            wordKeysExact = false
+            wordLength = 0
+        } else {
+            wordLength += e.text.length - e.deleteCount
+        }
+    }
+
+    /** MiniKeyboardIME.clearWord. */
+    private fun clearWord() {
+        wordKeys.setLength(0)
+        wordKeysExact = true
+        wordLength = 0
     }
 
     /** MiniKeyboardIME.onDirectCharacter: end the word, insert without the engine. */
     fun direct(char: Char) {
         driver.resetContext()
-        field.insertDirect(char.toString())
+        clearWord()
+        insertDirect(char.toString())
     }
 
     fun reset() {
-        wordKeys.setLength(0)
-        driver.resetContext()
+        resetEngine()
         driver.language = Driver.VIETNAMESE
         field.text.setLength(0)
         field.readContext()
+    }
+
+    /** MiniKeyboardIME.resetEngine: drop the engine word and the recorded keys. */
+    fun resetEngine() {
+        clearWord()
+        driver.resetContext()
+        undoLastEdit = null
     }
 }
 
@@ -156,6 +227,23 @@ fun main() {
     word("double-tap vowel", "dance") { type("dan"); type("f"); replaceWith('c'); type("e") }
     word("double-tap one-letter word", "az") { type("a"); type("s"); replaceWith('z') }
     word("double-tap, word start", "quả") { type("x"); replaceWith('q'); type("uar") }
+    // A double-tap must keep the cluster, not delete it, and the word must keep
+    // recording keys afterwards (so a second double-tap replays the whole word).
+    word("double-tap keeps the cluster", "baz") { type("bas"); replaceWith('z') }
+    word("double-tap twice in a word", "azb") {
+        type("as"); replaceWith('z'); type("n"); replaceWith('b')
+    }
+    // The engine resumes a word on backspace right after the space, so the
+    // first tap only adds a tone; the fallback must take back that tone, not
+    // the last letter ("bán" - 1 would be "bá"), and never the word before it.
+    word("double-tap on a resumed word", "bạnz") {
+        type("banj"); type(" "); backspace(); type("s"); replaceWith('z')
+    }
+    // Auto-switch undo puts the Vietnamese rendering back on screen; the
+    // double-tap still replaces only its own letter.
+    word("double-tap after auto-switch undo", "ưillz") {
+        type("will"); type(" "); backspace(); type("s"); replaceWith('z')
+    }
 
     // Numeric layer: the word ends where the digit starts.
     word("digit after word", "tôi5") { type("tooi"); direct('5') }

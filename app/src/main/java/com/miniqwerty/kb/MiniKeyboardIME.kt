@@ -58,8 +58,33 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
      *  so the engine ends up holding the secondary instead of the primary.
      *  Cleared when the word ends, when the engine context resets, and on
      *  backspace (the engine then removes the last displayed letter, not the
-     *  last key, so the keys we recorded no longer describe the word). */
+     *  last key, so the keys we recorded no longer describe the word — see
+     *  [wordKeysExact]). */
     private val wordKeys = StringBuilder()
+
+    /**
+     * Characters the current word occupies on screen. This is the engine's
+     * rendering of [wordKeys], not the number of keys typed (a triple letter
+     * collapses: `dooor` -> `door`), and it is how much a double-tap has to
+     * replace. The trailing run of letters in [lastContext] is *not* a safe
+     * proxy: after backspacing over a space the previous word is glued to the
+     * caret ("will" + space + ⌫), so that run would swallow it whole.
+     */
+    private var wordLength = 0
+
+    /** True while [wordKeys] still describes the whole word on screen. A
+     *  backspace takes back the last *displayed* letter, so the recorded keys
+     *  no longer do and a double-tap falls back to [replaceLastTap] until the
+     *  word ends. */
+    private var wordKeysExact = true
+
+    /**
+     * The inverse of the last edit we sent — delete what it inserted, put the
+     * removed text back. A double-tap that cannot replay the word uses it to
+     * take the first tap back exactly. Null when the edit cannot be reversed
+     * (the text before the caret was never read).
+     */
+    private var undoLastEdit: Edit? = null
 
     /** Editor capabilities from the last [onStartInput]. */
     private var editorInfo: EditorInfo? = null
@@ -331,14 +356,14 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
         // is the only correct way — taking the last character back would delete
         // a letter the first tap only toned ("ba" + s -> "bá", not "bá" - 1).
         val ic = currentInputConnection ?: return
-        val displayed = letterRunLength(lastContext ?: "")
-        if (wordKeys.isEmpty() || displayed == 0) {
-            applyEdit(ic, driver.backspace(now))
-            type(ic, char)
+        if (!wordKeysExact || wordKeys.isEmpty() || wordLength == 0) {
+            // Nothing replayable: take the first tap's edit back and commit the
+            // secondary as plain text (see undoLastEdit).
+            replaceLastTap(ic, char)
         } else {
             wordKeys.setLength(wordKeys.length - 1)
             wordKeys.append(char)
-            replayWord(ic, displayed)
+            replayWord(ic, wordLength)
         }
         syncShiftIndicator()
         updateSuggestionStrip()
@@ -382,11 +407,14 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
             resetEngine()
             readContext()
         } else {
-            applyEdit(ic, driver.backspace(now))
+            val e = driver.backspace(now)
+            applyEdit(ic, e)
+            // The engine drops the last displayed letter, not the last key, so
+            // the keys recorded for the word no longer describe it.
+            accountWordEdit(e)
+            wordKeys.setLength(0)
+            wordKeysExact = false
         }
-        // The engine drops the last displayed letter, not the last key, so the
-        // keys recorded for the word no longer describe it.
-        wordKeys.setLength(0)
         // Deleting text breaks the sentence context — don't force the next
         // letter into a capital.
         capitalizeNext = false
@@ -635,13 +663,19 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     /** One character typed through the engine. */
     private fun type(ic: InputConnection, char: Char) {
         if (isPasswordField) {
-            wordKeys.setLength(0)
+            clearWord()
             insertDirect(ic, char.toString())
             return
         }
-        applyEdit(ic, driver.typeCharacter(char.toString(), now))
+        val e = driver.typeCharacter(char.toString(), now)
+        applyEdit(ic, e)
         // A letter continues the word; anything else ends it.
-        if (char.isLetter()) wordKeys.append(char) else wordKeys.setLength(0)
+        if (char.isLetter()) {
+            wordKeys.append(char)
+            accountWordEdit(e)
+        } else {
+            clearWord()
+        }
     }
 
     /**
@@ -652,31 +686,68 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
      * previous-word look-back, which only affects auto switch heuristics.
      */
     private fun replayWord(ic: InputConnection, displayed: Int) {
+        // Snapshot first: resetEngine() also empties wordKeys, which would
+        // otherwise leave the replay with nothing to type and delete the word.
+        val keys = wordKeys.toString()
         resetEngine()
         var shadow = ""
-        for (c in wordKeys) {
+        for (c in keys) {
             val e = driver.typeCharacter(c.toString(), now)
             shadow = shadow.dropLast(minOf(e.deleteCount, shadow.length)) + e.text
         }
         applyEdit(ic, Edit(displayed, shadow, false))
+        // The engine now holds the replayed word, so resume recording its keys
+        // — the next keystroke continues it and the next double-tap replays it.
+        wordKeys.append(keys)
+        wordKeysExact = true
+        wordLength = shadow.length
     }
 
-    /** Length of the run of letters at the end of [s] — the word on screen. */
-    private fun letterRunLength(s: String): Int {
-        var i = s.length
-        while (i > 0 && s[i - 1].isLetter()) i--
-        return s.length - i
+    /**
+     * Keep [wordLength] in step with an engine edit that belongs to the current
+     * word: the edit replaces the last [Edit.deleteCount] characters of the
+     * word with [Edit.text]. An edit that reaches further back than the word
+     * itself means the engine rewrote earlier text (auto-switch look-back), so
+     * the recorded keys no longer describe the screen.
+     */
+    private fun accountWordEdit(e: Edit) {
+        if (e.deleteCount > wordLength) {
+            wordKeys.setLength(0)
+            wordKeysExact = false
+            wordLength = 0
+        } else {
+            wordLength += e.text.length - e.deleteCount
+        }
+    }
+
+    /** The current word is over: nothing left to replay or measure. */
+    private fun clearWord() {
+        wordKeys.setLength(0)
+        wordKeysExact = true
+        wordLength = 0
     }
 
     /**
      * Apply an [Edit] to the editor, sending only what actually changes:
      * "tooi" + s comes back as delete "oi" + insert "ói", so the leading "o"
      * is kept instead of deleted and retyped.
+     *
+     * Also remembers the exact inverse in [undoLastEdit]: the edit turns the
+     * tail from the first [Edit.deleteCount] chars of [lastContext] into
+     * [Edit.text], so reversing it means deleting that text and putting the
+     * old tail back.
      */
     private fun applyEdit(ic: InputConnection, e: Edit) {
         var deletes = e.deleteCount
         var insert = e.text
         val before = lastContext
+        undoLastEdit = if (deletes == 0) {
+            Edit(insert.length, "", false)
+        } else if (before != null && before.length >= deletes) {
+            Edit(insert.length, before.takeLast(deletes), false)
+        } else {
+            null
+        }
         if (deletes > 0 && before != null && before.length >= deletes) {
             val old = before.takeLast(deletes)
             var same = 0
@@ -696,6 +767,33 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     private fun insertDirect(ic: InputConnection, text: String) {
         ic.commitText(text, 1)
         afterEdit(0, text)
+        // Plain insertion at the caret: taking it back means deleting it.
+        undoLastEdit = Edit(text.length, "", false)
+    }
+
+    /**
+     * Double-tap fallback when the word cannot be replayed (a backspace took a
+     * letter back, or no Telex word is open): reverse the first tap's edit and
+     * commit the secondary as plain text.
+     *
+     * Asking the engine for a backspace instead is wrong twice over — it
+     * removes the last *displayed* letter (so a tap that only added a tone
+     * costs a letter: "bán" -> "bá"), and right after a word break it resumes
+     * the previous word, so the reply can reach back past the tap and eat the
+     * word before it. The engine's word is dropped rather than left describing
+     * text that is no longer on screen.
+     */
+    private fun replaceLastTap(ic: InputConnection, char: Char) {
+        val undo = undoLastEdit
+        if (undo == null) {
+            // Nothing to reverse (the field was never read): the old fallback.
+            applyEdit(ic, driver.backspace(now))
+            type(ic, char)
+            return
+        }
+        applyEdit(ic, undo)
+        resetEngine()
+        insertDirect(ic, char.toString())
     }
 
     /** Keep [lastContext] and [cursorPos] in step with an edit we just made. */
@@ -720,7 +818,8 @@ class MiniKeyboardIME : InputMethodService(), OnKeyActionListener {
     /** Drop the engine's word state — new field, caret move, paste, enter. */
     private fun resetEngine() {
         driver.resetContext()
-        wordKeys.setLength(0)
+        clearWord()
+        undoLastEdit = null
     }
 
     /**
