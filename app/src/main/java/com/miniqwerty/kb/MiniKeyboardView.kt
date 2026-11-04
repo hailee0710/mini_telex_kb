@@ -130,8 +130,7 @@ class MiniKeyboardView(context: Context) : View(context) {
 
     // ── Keyboard height (drag-adjustable, persisted) ──────────────────────
     private var rowHeightDp: Float =
-        prefs.getFloat(Prefs.KEY_ROW_HEIGHT_DP, Prefs.ROW_HEIGHT_DEFAULT_DP)
-            .coerceIn(Prefs.ROW_HEIGHT_MIN_DP, Prefs.ROW_HEIGHT_MAX_DP)
+        sanitizeRowHeightDp(prefs.getFloat(Prefs.KEY_ROW_HEIGHT_DP, Prefs.ROW_HEIGHT_DEFAULT_DP))
 
     private var dragActive: Boolean = false
     private var dragStartY: Float = 0f
@@ -550,9 +549,22 @@ class MiniKeyboardView(context: Context) : View(context) {
         // band is reserved on the clipboard layer too (where it draws nothing),
         // so switching layers does not resize the window.
         val stripH = if (suggestionVisible) SUGGESTION_STRIP_HEIGHT_DP * density else 0f
-        val height = (((HANDLE_HEIGHT_DP + rowHeightDp * effectiveRows(rows)) * density) + stripH).toInt()
+        val height = (((HANDLE_HEIGHT_DP + sanitizeRowHeightDp(rowHeightDp) * effectiveRows(rows)) * density) + stripH).toInt()
         setMeasuredDimension(width, height)
     }
+
+    /**
+     * A stored row height can be corrupt — an interrupted drag once persisted
+     * `NaN`, and [coerceIn] passes `NaN` straight through. A `NaN` height
+     * measures as 0 px, i.e. a keyboard window with nothing in it, which looks
+     * exactly like a keyboard that failed to open. Fall back to the default.
+     */
+    private fun sanitizeRowHeightDp(value: Float): Float =
+        if (value.isFinite()) {
+            value.coerceIn(Prefs.ROW_HEIGHT_MIN_DP, Prefs.ROW_HEIGHT_MAX_DP)
+        } else {
+            Prefs.ROW_HEIGHT_DEFAULT_DP
+        }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -1262,8 +1274,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                     val rows = if (currentLayer == KeyboardLayer.CLIPBOARD) CLIPBOARD_SLOTS.toFloat()
                                else effectiveRows(keys.size)
                     val rowDelta = (dragStartY - ey) / density / rows
-                    rowHeightDp = (dragStartRowDp + rowDelta)
-                        .coerceIn(Prefs.ROW_HEIGHT_MIN_DP, Prefs.ROW_HEIGHT_MAX_DP)
+                    rowHeightDp = sanitizeRowHeightDp(dragStartRowDp + rowDelta)
                     requestLayout()
                     return true
                 }
@@ -1380,7 +1391,9 @@ class MiniKeyboardView(context: Context) : View(context) {
                 if (dragActive) {
                     dragActive = false
                     activePointerId = MotionEvent.INVALID_POINTER_ID
-                    prefs.edit().putFloat(Prefs.KEY_ROW_HEIGHT_DP, rowHeightDp).apply()
+                    prefs.edit()
+                        .putFloat(Prefs.KEY_ROW_HEIGHT_DP, sanitizeRowHeightDp(rowHeightDp))
+                        .apply()
                     invalidate()
                     return true
                 }
