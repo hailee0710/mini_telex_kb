@@ -29,6 +29,7 @@ class MainActivity : Activity() {
             Prefs.THEME_LIGHT -> themeGroup.check(R.id.theme_light)
             Prefs.THEME_DARK  -> themeGroup.check(R.id.theme_dark)
             Prefs.THEME_BLACK -> themeGroup.check(R.id.theme_black)
+            Prefs.THEME_EINK  -> themeGroup.check(R.id.theme_eink)
             else              -> themeGroup.check(R.id.theme_system)
         }
         themeGroup.setOnCheckedChangeListener { _, checkedId ->
@@ -36,6 +37,7 @@ class MainActivity : Activity() {
                 R.id.theme_light -> Prefs.THEME_LIGHT
                 R.id.theme_dark  -> Prefs.THEME_DARK
                 R.id.theme_black -> Prefs.THEME_BLACK
+                R.id.theme_eink  -> Prefs.THEME_EINK
                 else             -> Prefs.THEME_SYSTEM
             }
             prefs.edit().putInt(Prefs.KEY_THEME_MODE, mode).apply()

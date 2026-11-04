@@ -10,6 +10,7 @@
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
     <string name="theme_black">Black (OLED)</string>
+    <string name="theme_eink">E-ink (white page)</string>
     <string name="enable_button">Enable keyboard</string>
 
     <string name="haptics_title">Haptics</string>

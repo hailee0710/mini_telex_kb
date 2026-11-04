@@ -283,26 +283,46 @@ class MiniKeyboardView(context: Context) : View(context) {
                 suggestionTextPaint.color = 0xFFFFFFFF.toInt()
                 handlePaint.color = 0x59FFFFFF.toInt()
             }
-            else -> { // PALETTE_LIGHT
-                // E-ink first: greys quantize hard on an e-paper panel, so the
-                // separation between background, modifier and character keys is
-                // wider than a phone needs, every key carries a visible
-                // outline, and the label greys are dark enough to survive the
-                // panel's anti-aliasing (see PALETTE_LIGHT notes in CLAUDE.md).
+            PALETTE_LIGHT -> {
+                // Plain light look for an LCD/OLED phone: soft grey page,
+                // near-white keys, no outline (the palette is flat by design).
                 bgPaint.color = LIGHT_BG_COLOR
-                keyBgPaint.color = LIGHT_BG_COLOR
-                keyBgModifierPaint.color = 0xFFE8EBEE.toInt()
-                keyBgPressedPaint.color = 0xFFBFC5CB.toInt()
-                keyBorderPaint.color = 0xFF6F777F.toInt()
-                primaryTextPaint.color = 0xFF1B1B1B.toInt()
-                toneTextPaint.color = 0xFFC04300.toInt() // orange accent
-                capsLockTextPaint.color = 0xFFC04300.toInt() // orange accent
-                secondaryTextPaint.color = 0xFF6A6F75.toInt()
-                functionTextPaint.color = 0xFF303338.toInt()
-                functionBoldTextPaint.color = 0xFF303338.toInt()
-                clipboardItemTextPaint.color = 0xFF1B1B1B.toInt()
-                suggestionTextPaint.color = 0xFF1B1B1B.toInt()
-                handlePaint.color = 0xAA8A9096.toInt()
+                keyBgPaint.color = 0xFFEEEEEE.toInt()
+                keyBgModifierPaint.color = 0xFFDDE0E4.toInt()
+                keyBgPressedPaint.color = 0xFFCFD3D7.toInt()
+                keyBorderPaint.color = Color.TRANSPARENT
+                primaryTextPaint.color = 0xFF2A2A2A.toInt()
+                toneTextPaint.color = 0xFFE65100.toInt() // orange accent
+                capsLockTextPaint.color = 0xFFE65100.toInt() // orange accent
+                secondaryTextPaint.color = 0xFF8A8A8A.toInt()
+                functionTextPaint.color = 0xFF4A4A4A.toInt()
+                functionBoldTextPaint.color = 0xFF4A4A4A.toInt()
+                clipboardItemTextPaint.color = 0xFF2A2A2A.toInt()
+                suggestionTextPaint.color = 0xFF2A2A2A.toInt()
+                handlePaint.color = 0x66808080.toInt()
+            }
+            else -> { // PALETTE_EINK
+                // White page for e-paper: background and character keys are both
+                // pure white (white refreshes fastest and needs no dithering),
+                // so the key outline does all the separating — and it is black
+                // at full strength, because a grey line fades on the panel.
+                // No accent color: an orange turns into a flat mid grey on a
+                // grayscale panel, so the tone keys are plain black and bold
+                // (toneTextPaint already is).
+                bgPaint.color = EINK_BG_COLOR
+                keyBgPaint.color = EINK_BG_COLOR
+                keyBgModifierPaint.color = 0xFFEDEDED.toInt()
+                keyBgPressedPaint.color = 0xFFC4C4C4.toInt()
+                keyBorderPaint.color = 0xFF000000.toInt()
+                primaryTextPaint.color = 0xFF000000.toInt()
+                toneTextPaint.color = 0xFF000000.toInt()
+                capsLockTextPaint.color = 0xFF000000.toInt()
+                secondaryTextPaint.color = 0xFF4D4D4D.toInt()
+                functionTextPaint.color = 0xFF000000.toInt()
+                functionBoldTextPaint.color = 0xFF000000.toInt()
+                clipboardItemTextPaint.color = 0xFF000000.toInt()
+                suggestionTextPaint.color = 0xFF000000.toInt()
+                handlePaint.color = 0xFF999999.toInt()
             }
         }
     }
@@ -1018,7 +1038,10 @@ class MiniKeyboardView(context: Context) : View(context) {
         canvas.drawCircle(cx, cy, r, fabPaint)
 
         val labelPaint = Paint(functionTextPaint).apply {
-            color = 0xFF212121.toInt()  // dark label reads on both accent oranges
+            // Dark label reads on the orange accent; the E-ink palette paints
+            // the accent black, so the label flips to white there.
+            color = if (themePalette == PALETTE_EINK) 0xFFFFFFFF.toInt()
+                    else 0xFF212121.toInt()
             textSize = r * 0.55f
         }
         canvas.drawText("ABC", cx, cy + r * 0.2f, labelPaint)
@@ -1789,21 +1812,20 @@ class MiniKeyboardView(context: Context) : View(context) {
 
     companion object {
         /** Keyboard background fills — shared with the IME so the system
-         *  navigation bar can be tinted to match (MiniKeyboardIME).
-         *  The light palette is a white page: background and character keys are
-         *  both white and the key outline does the separating, because e-ink
-         *  renders a white field crisply (and refreshes fastest) while a pair of
-         *  near-whites would dither into one tone. */
+         *  navigation bar can be tinted to match (MiniKeyboardIME). */
         const val DARK_BG_COLOR = 0xFF292E32.toInt()
-        const val LIGHT_BG_COLOR = 0xFFFFFFFF.toInt()
+        const val LIGHT_BG_COLOR = 0xFFD5D9DE.toInt()
         /** Pure black for OLED screens — pixels stay off when idle. */
         const val OLED_BG_COLOR = 0xFF000000.toInt()
+        /** Pure white page for e-paper screens (see PALETTE_EINK). */
+        const val EINK_BG_COLOR = 0xFFFFFFFF.toInt()
 
         /** Color palettes the keyboard actually draws. Distinct from the
          *  Prefs.THEME_* values: THEME_SYSTEM resolves to LIGHT or DARK here. */
         private const val PALETTE_LIGHT = 0
         private const val PALETTE_DARK = 1
         private const val PALETTE_OLED = 2
+        private const val PALETTE_EINK = 3
 
         /** Resolve the palette from the theme pref (system by default, following
          *  the current uiMode). Shared with the IME for the nav-bar tint. */
@@ -1813,6 +1835,7 @@ class MiniKeyboardView(context: Context) : View(context) {
                 Prefs.THEME_LIGHT -> PALETTE_LIGHT
                 Prefs.THEME_DARK  -> PALETTE_DARK
                 Prefs.THEME_BLACK -> PALETTE_OLED
+                Prefs.THEME_EINK  -> PALETTE_EINK
                 else              -> if ((context.resources.configuration.uiMode and
                         Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES)
                     PALETTE_DARK else PALETTE_LIGHT
@@ -1824,6 +1847,7 @@ class MiniKeyboardView(context: Context) : View(context) {
             when (palette) {
                 PALETTE_DARK  -> DARK_BG_COLOR
                 PALETTE_OLED  -> OLED_BG_COLOR
+                PALETTE_EINK  -> EINK_BG_COLOR
                 else          -> LIGHT_BG_COLOR
             }
 

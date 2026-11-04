@@ -13,7 +13,7 @@ A compact 3-row QWERTY Android keyboard (IME) with a built-in Vietnamese **Telex
 - **Auto-capitalize** — the first letter of a sentence is uppercased, and Shift lights up to show it.
 - **Compact 3-row QWERTY** — the 9 rarest letters are quick double-tap secondaries on their QWERTY home keys; tone keys `X S F R J` sit where Telex typists expect them.
 - **Numeric/symbol layer** with symbol double-tap secondaries.
-- **Light/dark/system theme**, haptics toggle, adjustable keyboard height (drag handle), adjustable double-tap window.
+- **Light / dark / black / e-ink theme**, haptics toggle, adjustable keyboard height (drag handle), adjustable double-tap window.
 - **Tap accuracy** — nearest-key hit targets with thumb-offset correction, press feedback on key-down, and multi-touch handling so fast typing never drops a key.
 - **No special permissions** — nothing to grant, nothing to leak.
 
@@ -73,7 +73,7 @@ Quick double-tap on a key replaces the last character with the key's secondary. 
 
 ## Settings
 
-- Theme: system / light / dark / black (OLED)
+- Theme: system / light / dark / black (OLED) / e-ink (white page, black key outlines)
 - Haptics on/off
 - Smart Telex on/off
 - Auto-capitalize on/off

@@ -54,6 +54,12 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/theme_black" />
+
+        <RadioButton
+            android:id="@+id/theme_eink"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/theme_eink" />
     </RadioGroup>
 
     <TextView

@@ -11,7 +11,7 @@ Bàn phím QWERTY 3 hàng gọn nhẹ cho Android (IME) tích hợp sẵn bộ g
 - **Tự viết hoa** — chữ đầu câu được viết hoa, phím Shift sáng lên để báo.
 - **QWERTY 3 hàng gọn** — 9 chữ cái hiếm nhất là phím phụ (chạm hai lần nhanh) nằm đúng vị trí QWERTY quen thuộc; phím dấu `X S F R J` đặt nơi người gõ Telex mong đợi.
 - **Hàng số/ký tự** kèm ký tự phụ khi chạm hai lần.
-- **Giao diện sáng/tối/theo hệ thống**, tùy chọn rung, kéo để chỉnh độ cao bàn phím, tùy chỉnh cửa sổ chạm đúp.
+- **Giao diện sáng / tối / đen / e-ink**, tùy chọn rung, kéo để chỉnh độ cao bàn phím, tùy chỉnh cửa sổ chạm đúp.
 - **Độ chính xác khi gõ** — vùng nhấn tính theo phím gần nhất kèm bù vị trí ngón cái, rung ngay khi chạm, xử lý đa chạm để gõ nhanh không mất phím.
 - **Không cần quyền đặc biệt** — không có gì để cấp, không có gì để lộ.
 
@@ -71,7 +71,7 @@ Chạm nhanh hai lần vào phím sẽ thay ký tự cuối bằng ký tự ph�
 
 ## Cài đặt
 
-- Chủ đề: theo hệ thống / sáng / tối / đen (OLED)
+- Chủ đề: theo hệ thống / sáng / tối / đen (OLED) / e-ink (nền trắng, viền phím đen)
 - Bật/tắt rung
 - Bật/tắt Smart Telex
 - Bật/tắt tự viết hoa

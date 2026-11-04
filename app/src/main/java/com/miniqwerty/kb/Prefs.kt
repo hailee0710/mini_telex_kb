@@ -14,6 +14,8 @@ object Prefs {
     const val THEME_DARK = 2
     // OLED black: pure-black background, dark-gray keys (pixels stay off)
     const val THEME_BLACK = 3
+    // E-ink: white page, black key outlines, no accent color
+    const val THEME_EINK = 4
 
     // Keyboard row height, in dp
     const val KEY_ROW_HEIGHT_DP = "row_height_dp"
