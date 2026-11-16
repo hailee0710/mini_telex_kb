@@ -26,7 +26,7 @@ signature or a change in the engine's `Edit` packing fails here rather than on a
 | Backspace | mid-word, through a tone key, down to empty, at an empty field |
 | Double-tap | punctuation (`x,` → `x.`), a tone key, a mid-word vowel, word start |
 | Layers | a digit after a word (`tôi5`), a replaced digit, punctuation as a word break |
-| Auto switch | VI → EN → VI across a sentence |
+| Auto switch | VI → EN → VI across a sentence; a Telex word whose keys are also a rare English entry (`huw`, `tris`) still converts after an English word |
 
 Known engine behaviour pinned by the suite (not bugs to "fix" in the test):
 

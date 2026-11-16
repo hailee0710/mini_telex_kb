@@ -253,6 +253,16 @@ fun main() {
     word("comma", "tôi,") { type("tooi"); type(",") }
     word("auto-switch on space", "tôi và bạn") { type("tooi"); type(" "); type("vaf"); type(" "); type("banj"); type(" ") }
     word("english sentence", "fix this bug") { type("fix"); type(" "); type("this"); type(" "); type("bug"); type(" ") }
+    // A Telex word whose raw keys are also a barely-attested English entry must still
+    // convert right after an English word: "huw" (Huw) and "tris" (Tris) are names,
+    // not "a clearly English word", so the auto switch's D22 rule leaves them alone
+    // (Engine.cpp, AS_D22_MIN_EN).
+    word("ư after an english word", "server is hư") {
+        type("server "); type("is "); type("huw"); type(" ")
+    }
+    word("tone after an english word", "server is trí") {
+        type("server "); type("is "); type("tris"); type(" ")
+    }
 
     sim.driver.close()
     println(if (failures == 0) "all cases passed" else "$failures case(s) failed")

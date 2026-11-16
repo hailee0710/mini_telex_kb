@@ -19,13 +19,23 @@ and runs `VikeyDriver.kt` against them on the JVM.
 
 ## Changes from upstream
 
-Only `vikey_jni.cpp` (in the parent directory) differs:
+`vikey_jni.cpp` is the JNI surface, not upstream code; it differs on purpose:
 
 - `keyFor()` maps printable ASCII instead of a dozen punctuation keys, so pressing a
   symbol key no longer resets the word being composed.
 - `[` and `]` stay unmapped — upstream maps them to ơ/ư, but this keyboard has no such
   key and uses both brackets as symbols.
 - `configure()` also sets `vTeencode`; upstream hard-codes `vTeencode = 1` with no UI.
+
+`Engine.cpp` carries one small deviation, marked `AS_D22_MIN_EN`:
+
+- The auto switch's D22 rule ("a tie right after a clearly English word stays English")
+  used to fire for any word the English word data knew, including barely-attested name
+  entries. With the keyboard sitting in English mode after an English word, a Telex word
+  whose keys happen to be such an entry stayed literal — `server is huw` stayed `huw`
+  instead of `hư` (Huw is a Welsh name) and `… tris` stayed `tris` instead of `trí`.
+  D22 now needs the current word to score `>= 0` (`AS_D22_MIN_EN`), so real English words
+  at a tie still win ("the theme", "of rust") while a name-like entry does not.
 
 ## Engine behaviour worth knowing
 

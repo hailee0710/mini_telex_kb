@@ -1997,7 +1997,13 @@ bool vAutoSwitchCheckEnglishWord(const Uint32* keys, const int& count,
 #ifndef AS_PAIR_OVERRIDES_D22
 #define AS_PAIR_OVERRIDES_D22 10   //word pairs this sure of the Vietnamese reading (10x) beat D22: "team bên US" (D34)
 #endif
-    if (en != AS_MISSING && previousN >= 1 && previousCounts[0] >= 1 && pairVote < AS_PAIR_OVERRIDES_D22 && !vAutoSwitchPrevRestored && capVote < AS_CAP_MARGIN) {
+#ifndef AS_D22_MIN_EN
+//A score below 0 is a name-like entry that is barely attested in English ("huw" = Huw, "tris" = Tris), not
+//"a clearly English word": the Telex reading wins ("server is huw" -> hư, "… tris" -> trí). A real English
+//word at a tie keeps its English reading as D22 intends ("the theme" 14, "of rust" 40).
+#define AS_D22_MIN_EN 0
+#endif
+    if (en >= AS_D22_MIN_EN && previousN >= 1 && previousCounts[0] >= 1 && pairVote < AS_PAIR_OVERRIDES_D22 && !vAutoSwitchPrevRestored && capVote < AS_CAP_MARGIN) {
         char praw[AS_KEY_LEN];
         Uint32 tmp[MAX_BUFF]; int tmpCount;
         if (asRawWord(previous[0], previousCounts[0], praw)) {
